@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --all-extras
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+      - name: Types
+        run: uv run mypy
+
+      # No API key and no network. Everything the README reports has to run
+      # here, because a repository whose headline numbers can only be
+      # reproduced by its author is a claim rather than a result.
+      - name: Tests
+        run: uv run pytest -q --cov=residual --cov-report=term
+
+      # The one command a reviewer is told to run has to work.
+      - name: Walk the guided demo
+        run: uv run residual demo --no-pause
+
+      # A few hundred simulated lives on every push. Faults are injected on a
+      # seeded schedule and every invariant is checked after every delivery; a
+      # failure prints the seed that reproduces it exactly.
+      - name: Deterministic simulation testing
+        run: uv run residual dst --seeds 400
+
+      - name: Reproduce the reported numbers
+        run: |
+          uv run residual evaluate
+          uv run residual ablate
+          uv run residual backtest-forecast --horizon 14
+          uv run residual calibration
+          uv run residual certify-forecast --days 400
+
+      - name: Close a real gateway report against a real bank statement
+        run: |
+          uv run residual reconcile \
+            --recon tests/fixtures/recon_march.json \
+            --statement tests/fixtures/statements/hdfc.csv \
+            --contract "card=2.00" \
+            --gstr2b tests/fixtures/gst/gstr2b_march.json
+
+      - name: Seal a close pack and verify it round-trips
+        run: uv run residual pack --week 8
+
+      # A wrong filename must produce a message and exit 2, not a stack trace.
+      - name: Refuse bad input cleanly
+        run: |
+          set +e
+          out=$(uv run residual bank-statement --file /nope.csv 2>&1); code=$?
+          set -e
+          echo "$out"
+          [ "$code" = "2" ] || { echo "expected exit 2, got $code"; exit 1; }
+          echo "$out" | grep -q "Traceback" && { echo "stack trace leaked"; exit 1; }
+          echo "refused cleanly"

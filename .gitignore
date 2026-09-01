@@ -1,0 +1,40 @@
+# Secrets. Test-mode keys only, never committed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Tooling caches
+.pytest_cache/
+.hypothesis/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+.claude/
+
+# Generated output
+data/*.jsonl
+data/*.duckdb
+reports/*.json
+reports/*.png
+reports/*.html
+!data/.gitkeep
+!reports/.gitkeep
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

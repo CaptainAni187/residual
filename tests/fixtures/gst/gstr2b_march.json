@@ -1,0 +1,76 @@
+{
+  "data": {
+    "rtnprd": "032026",
+    "gstin": "29AACCA1234M1ZX",
+    "docdata": {
+      "b2b": [
+        {
+          "ctin": "29AAGCR4375J1ZU",
+          "trdnm": "RAZORPAY SOFTWARE PRIVATE LIMITED",
+          "inv": [
+            {
+              "inum": "RZP/2526/03/0009812",
+              "dt": "15-03-2026",
+              "val": "7851.81",
+              "itms": [
+                {
+                  "itm_det": {
+                    "txval": "6654.08",
+                    "cgst": "598.86",
+                    "sgst": "598.87",
+                    "igst": "0.00",
+                    "cess": "0.00"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ctin": "29AABCF1234K1Z5",
+          "trdnm": "CLOUDFRAME HOSTING LLP",
+          "inv": [
+            {
+              "inum": "CF-2026-0331",
+              "dt": "28-03-2026",
+              "val": "41300.00",
+              "itms": [
+                {
+                  "itm_det": {
+                    "txval": "35000.00",
+                    "cgst": "3150.00",
+                    "sgst": "3150.00",
+                    "igst": "0.00",
+                    "cess": "0.00"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ctin": "29XXXXX9999X9X9",
+          "trdnm": "SUSPECT VENDOR",
+          "inv": [
+            {
+              "inum": "SV-77",
+              "dt": "20-03-2026",
+              "val": "11800.00",
+              "itms": [
+                {
+                  "itm_det": {
+                    "txval": "10000.00",
+                    "cgst": "900.00",
+                    "sgst": "900.00",
+                    "igst": "0.00",
+                    "cess": "0.00"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
