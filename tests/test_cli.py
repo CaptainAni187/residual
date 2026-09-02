@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,10 @@ def _run(*args: str):
     result = runner.invoke(app, list(args))
     assert result.exit_code == 0, result.output + str(result.exception)
     return result.output
+
+
+def _closes_to_zero(out: str) -> bool:
+    return re.search(r"^\s*residual\s+INR 0\.00\b", out, re.MULTILINE) is not None
 
 
 def test_a_log_survives_the_round_trip(tmp_path) -> None:
@@ -47,7 +52,7 @@ def test_a_tampered_log_is_refused(tmp_path) -> None:
 def test_real_recon_data_closes_to_zero() -> None:
     out = _run("ingest", "--file", FIXTURE, "--contract", "card=2.90,upi=2.36")
     assert "5 recon rows -> 6 ledger events" in out
-    assert "INR 0.00" in out.split("residual")[1]
+    assert _closes_to_zero(out), out
 
 
 def test_fee_findings_are_disclaimed_without_a_contract() -> None:
@@ -102,7 +107,7 @@ def test_a_real_three_source_close_runs_end_to_end() -> None:
         "--gstr2b", str(base / "gst" / "gstr2b_march.json"),
     )
     assert "every one agrees with the statement" in out
-    assert "INR 0.00" in out.split("residual")[1]
+    assert _closes_to_zero(out), out
     assert "At risk" in out
 
 
@@ -115,7 +120,7 @@ def test_a_pdf_statement_closes_the_same_way() -> None:
         "--contract", "card=2.00",
     )
     assert "word coordinates" in out
-    assert "INR 0.00" in out.split("residual")[1]
+    assert _closes_to_zero(out), out
 
 
 def test_check_live_explains_itself_without_credentials(monkeypatch) -> None:
