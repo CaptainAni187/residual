@@ -174,15 +174,10 @@ signal is the width it needs to stay honest.
 The seventeen verifiers are a fixed registry, so the books close on a world
 whose causes are all known. The interesting case is the one they aren't.
 
-`residual rediscover` removes one verifier. The residual immediately opens by
+`residual rediscover` removes a verifier. The residual immediately opens by
 exactly what that verifier used to claim, and a proposer is asked what is
-missing. It gets the schema, the accounts in the books, and the causes already
-explained. **It is never told the amount it has to match** —
-`test_the_proposer_is_never_told_the_amount_it_has_to_match` asserts the figure
-does not appear anywhere in the request.
-
-A proposal comes back as a name, the accounts it claims, and one SQL query. It
-is accepted only if all of this holds:
+missing. It comes back with a name, the accounts it claims, and one SQL query,
+which is accepted only if **all** of this holds:
 
 - the SQL passes the same parse-tree validation as every other generated query
 - it returns exactly one row, one column, a signed integer in paise
@@ -196,22 +191,70 @@ wrong, and the books catch it:
 right number, wrong account -> rejected - account(s) still do not balance: fee_expense, refunds
 ```
 
-So the proposer may invent an explanation; it cannot make the books agree with
-one. The generator is free and the checker is exact, which is the only shape of
-this I would trust near money.
+### The result
 
-Nine causes open a non-zero residual in the benchmark week. A naive baseline —
-sum the account with the largest movement — scores **0/9**, which is the point:
-guessing does not pass.
+Every removable cause, every week of the benchmark quarter:
+
+| proposer | rediscovered | wrongly accepted |
+|---|---|---|
+| largest moving account | 0 / 81 | 0 |
+| slice-and-contract searcher | **81 / 81** | **0** |
 
 ```bash
-uv run residual rediscover --week 8            # baseline
-uv run residual rediscover --week 8 --model    # needs ANTHROPIC_API_KEY
+uv run residual rediscover --all-weeks
+uv run residual rediscover --all-weeks --baseline
 ```
 
-The model arm runs the same adjudication and is covered by tests against a
-stubbed client. I have not run it against the real model — there was no key on
-the machine this was built on, so no score for it is claimed here.
+No model and no API key. The searcher enumerates a hypothesis space built from
+what a merchant actually holds — every account, every account crossed with the
+event type that moved it, and, given the contract, the fee priced at the
+contracted rate, the fee as billed, and the difference between them. It runs
+each candidate and keeps the ones equal to the shortfall.
+
+### Why this is not fitting to the answer
+
+The obvious objection is that the searcher is told the shortfall and hunts for
+something matching it. It is told — a merchant knows what they are short. Two
+things stop that from being enough:
+
+- **The partition still has to hold.** A candidate that hits the number on the
+  wrong account is rejected, which is the failure shown above.
+- **The match is not ambiguous.** Across all 81 cases a mean of 1.7 candidates
+  equalled the shortfall, at most 4 — and they **never once disagreed about
+  which account they claimed**. `test_matching_candidates_never_disagree_about_the_account`
+  checks that every week. Where nothing matches, the searcher returns no
+  proposal rather than its closest guess.
+
+### The one it cannot do, and why that is not a failure
+
+`captured_not_yet_settled` claims the whole receivable account, and
+`bank_holiday_delay` **refines** it — subtracts from it. Remove the parent and
+the residual is *parent minus child*, which is an arithmetic artifact, not a
+cause anybody would name. So `rediscover` excludes any cause another verifier
+refines, and says why:
+
+```
+captured_not_yet_settled   excluded
+  not independently rediscoverable: bank_holiday_delay refines it, so removing
+  the parent leaves parent minus child, which is an artifact and not a cause
+```
+
+`test_the_refinement_artifact_is_the_parent_minus_the_child` proves the identity
+rather than asserting it.
+
+### The model arm
+
+A `ModelProposer` runs the identical adjudication over the same brief, minus the
+shortfall — `test_the_proposer_is_never_told_the_amount_it_has_to_match`
+serialises the whole request and asserts the figure appears nowhere in it. It is
+covered by tests against a stubbed client and needs a key to run for real.
+
+One-shot proposals written by a language model without the shortfall and without
+the ability to probe first are recorded in `tests/fixtures/proposals/week8.json`
+and replayed in CI: **6 of 9, 0 wrongly accepted**. Both misses were the two fee
+causes, which are not recoverable from the postings table by any slice at all —
+they need the contract. That is a limit of proposing blind, and it is the reason
+the searcher gets to look first.
 
 ## Deterministic simulation testing
 
@@ -221,7 +264,7 @@ every delivery: `duplicate_batch`, `crash_and_replay`, `reorder`, `split`,
 
 ```bash
 uv run residual dst --seeds 3000
-uv run residual rediscover --week 8
+uv run residual rediscover --all-weeks
 ```
 
 The property that matters is convergence — for any schedule of faults the system
@@ -397,12 +440,12 @@ The rest of the surface: `Money` and `allocate` for money that never touches a
 float, `fold` and `position_at` for balances, `forecast` and `backtest` for the
 cash floor, `ask` for the question catalogue, `build_pack` and `verify_pack` for
 a sealed close, `restate` for a close replayed as of a cutoff, `assess_tax` for
-input-credit risk. `residual.__all__` lists all 46 names.
+input-credit risk. `residual.__all__` lists all 47 names.
 
 ## Commands
 
 ```bash
-uv run pytest                          # 519 tests
+uv run pytest                          # 531 tests
 uv run residual demo                   # guided walkthrough
 uv run residual serve                  # dashboard
 uv run residual close --week 8 --show-sql
@@ -480,8 +523,13 @@ Three layers, enforced by tests rather than convention:
 - The dashboard is read-only and unauthenticated. It binds to localhost.
 - The question layer answers from a fixed catalogue of queries unless a model is
   configured. Outside that catalogue it says so rather than guessing.
-- `rediscover --model` has never been run against the real model. The loop and
-  its adjudication are tested against a stubbed client; the score is not.
+- Rediscovery runs on the deterministic searcher and needs no model. The
+  optional `--model` arm has never been run against a live model: the loop and
+  its adjudication are tested against a stubbed client, and the recorded 6/9 is
+  one model's one-shot attempt, not a benchmark of models.
+- The searcher's hypothesis space is account slices plus contract-derived fee
+  candidates. A cause expressible in neither would not be found, and the honest
+  signal for that is that it returns no proposal rather than a wrong one.
 
 ## Licence
 

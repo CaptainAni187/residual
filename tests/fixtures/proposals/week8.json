@@ -1,0 +1,90 @@
+{
+  "_note": "One-shot proposals written from the brief alone (window, account list, causes already explained, schema). The residual was never shown. Caveat: this file is keyed by the held-out cause, so the writer knew which verifier was removed; ModelProposer is not told that. Treat the score as a bound on the adjudicator, not a measurement of the model.",
+  "window": [
+    "2026-03-02",
+    "2026-03-08"
+  ],
+  "proposals": {
+    "normal_fee": {
+      "name": "gateway_fee_on_captures",
+      "title": "Gateway fee charged on captured payments",
+      "accounts": [
+        "fee_expense"
+      ],
+      "rationale": "fee_expense moves on capture and on settlement; the capture half is the ordinary gateway fee",
+      "sql": "SELECT COALESCE(SUM(amount_paise), 0) FROM postings WHERE account = 'fee_expense' AND event_type = 'payment_captured' AND occurred_at BETWEEN DATE '2026-03-02' AND DATE '2026-03-08'"
+    },
+    "gst_on_fee": {
+      "name": "gst_on_gateway_fee",
+      "title": "GST charged on the gateway fee",
+      "accounts": [
+        "gst_input_credit"
+      ],
+      "rationale": "gst_input_credit is claimed by nothing in the explained list",
+      "sql": "SELECT COALESCE(SUM(amount_paise), 0) FROM postings WHERE account = 'gst_input_credit' AND occurred_at BETWEEN DATE '2026-03-02' AND DATE '2026-03-08'"
+    },
+    "tds_194o": {
+      "name": "tds_withheld_194o",
+      "title": "TDS withheld under section 194-O",
+      "accounts": [
+        "tds_receivable"
+      ],
+      "rationale": "tds_receivable is unexplained and only section 194-O moves it",
+      "sql": "SELECT COALESCE(SUM(amount_paise), 0) FROM postings WHERE account = 'tds_receivable' AND occurred_at BETWEEN DATE '2026-03-02' AND DATE '2026-03-08'"
+    },
+    "fee_rate_increase": {
+      "name": "fee_billed_above_contract",
+      "title": "Fee billed above the contracted rate",
+      "accounts": [
+        "fee_expense"
+      ],
+      "rationale": "normal_fee is explained, so the remaining fee_expense movement is the overcharge",
+      "sql": "SELECT COALESCE(SUM(amount_paise), 0) FROM postings WHERE account = 'fee_expense' AND event_type = 'payment_captured' AND occurred_at BETWEEN DATE '2026-03-02' AND DATE '2026-03-08'"
+    },
+    "refunds_issued": {
+      "name": "refunds_to_customers",
+      "title": "Refunds returned to customers",
+      "accounts": [
+        "refunds"
+      ],
+      "rationale": "the refunds account is unclaimed by anything in the explained list",
+      "sql": "SELECT COALESCE(SUM(amount_paise), 0) FROM postings WHERE account = 'refunds' AND occurred_at BETWEEN DATE '2026-03-02' AND DATE '2026-03-08'"
+    },
+    "dispute_reserve_held": {
+      "name": "dispute_reserve_movement",
+      "title": "Reserve held and released against disputes",
+      "accounts": [
+        "dispute_reserve"
+      ],
+      "rationale": "dispute_reserve moves when a dispute opens and when it resolves; nothing explained claims it",
+      "sql": "SELECT COALESCE(SUM(amount_paise), 0) FROM postings WHERE account = 'dispute_reserve' AND occurred_at BETWEEN DATE '2026-03-02' AND DATE '2026-03-08'"
+    },
+    "route_split": {
+      "name": "revenue_routed_to_third_parties",
+      "title": "Revenue split away to routed accounts",
+      "accounts": [
+        "revenue"
+      ],
+      "rationale": "revenue carries gross capture and any share transferred onward",
+      "sql": "SELECT COALESCE(SUM(amount_paise), 0) FROM postings WHERE account = 'revenue' AND event_type = 'route_transfer' AND occurred_at BETWEEN DATE '2026-03-02' AND DATE '2026-03-08'"
+    },
+    "captured_not_yet_settled": {
+      "name": "receivable_awaiting_settlement",
+      "title": "Captured but not yet settled",
+      "accounts": [
+        "gateway_receivable"
+      ],
+      "rationale": "bank_holiday_delay explains part of the receivable; the ordinary T+2 wait is the rest",
+      "sql": "SELECT COALESCE(SUM(amount_paise), 0) FROM postings WHERE account = 'gateway_receivable' AND event_type = 'payment_captured' AND occurred_at BETWEEN DATE '2026-03-02' AND DATE '2026-03-08'"
+    },
+    "risk_hold": {
+      "name": "funds_under_risk_hold",
+      "title": "Funds frozen by a risk hold",
+      "accounts": [
+        "on_hold"
+      ],
+      "rationale": "the on_hold account is unclaimed and only a risk hold moves it",
+      "sql": "SELECT COALESCE(SUM(amount_paise), 0) FROM postings WHERE account = 'on_hold' AND occurred_at BETWEEN DATE '2026-03-02' AND DATE '2026-03-08'"
+    }
+  }
+}

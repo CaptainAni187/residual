@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal
+from pathlib import Path
 from typing import Any, Protocol
 
 from residual.domain.causes import Cause
@@ -57,6 +59,8 @@ class Brief:
     end: date
     accounts: tuple[str, ...]
     explained: tuple[str, ...]
+    unexplained: Money = field(default_factory=lambda: Money(0))
+    contracted: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,12 +92,16 @@ class Verdict:
         return "rejected - " + "; ".join(self.faults)
 
 
-def brief_for(close: Close, start: date, end: date) -> Brief:
+def brief_for(
+    close: Close, start: date, end: date, contracted: dict[str, str] | None = None
+) -> Brief:
     return Brief(
         start=start,
         end=end,
         accounts=tuple(sorted(str(c.account) for c in close.coverage)),
         explained=tuple(sorted(str(f.cause) for f in close.findings)),
+        unexplained=close.residual,
+        contracted=dict(contracted or {}),
     )
 
 
@@ -185,6 +193,102 @@ class LargestAccount:
         )
 
 
+class Recorded:
+
+    def __init__(self, path: str | Path, cause: str = "") -> None:
+        body = json.loads(Path(path).read_text())
+        self.book: dict[str, dict[str, Any]] = body["proposals"]
+        self.cause = cause
+
+    def propose(self, wh: Warehouse, brief: Brief) -> Proposal | None:
+        body = self.book.get(self.cause)
+        if body is None:
+            return None
+        return Proposal(
+            name=str(body["name"]),
+            title=str(body.get("title", body["name"])),
+            accounts=tuple(str(a) for a in body["accounts"]),
+            sql=str(body["sql"]),
+            rationale=str(body.get("rationale", "")),
+            source="recorded",
+        )
+
+
+class Searcher:
+
+    def candidates(self, wh: Warehouse, brief: Brief) -> dict[str, str]:
+        window = f"occurred_at BETWEEN DATE '{brief.start}' AND DATE '{brief.end}'"
+        out: dict[str, str] = {}
+
+        for (account,) in wh.sql(
+            "SELECT DISTINCT account FROM postings WHERE occurred_at BETWEEN ? AND ?",
+            [brief.start, brief.end],
+        ):
+            out[f"{account}"] = (
+                f"SELECT COALESCE(SUM(amount_paise), 0) FROM postings "
+                f"WHERE account = '{account}' AND {window}"
+            )
+        for account, event_type in wh.sql(
+            "SELECT DISTINCT account, event_type FROM postings WHERE occurred_at BETWEEN ? AND ?",
+            [brief.start, brief.end],
+        ):
+            out[f"{account}|{event_type}"] = (
+                f"SELECT COALESCE(SUM(amount_paise), 0) FROM postings "
+                f"WHERE account = '{account}' AND event_type = '{event_type}' AND {window}"
+            )
+
+        if brief.contracted:
+            cases = " ".join(
+                f"WHEN method = '{method}' THEN CAST(ROUND(CAST(amount_paise AS DECIMAL(38,6))"
+                f" * CAST({Decimal(rate)} AS DECIMAL(12,6)) / 100, 0) AS BIGINT)"
+                for method, rate in sorted(brief.contracted.items())
+            )
+            captures = f"FROM events WHERE type = 'payment_captured' AND {window}"
+            out["fee_at_contracted_rate"] = (
+                f"SELECT COALESCE(SUM(CASE {cases} ELSE 0 END), 0) {captures}"
+            )
+            out["fee_as_billed"] = f"SELECT COALESCE(SUM(fee_paise), 0) {captures}"
+            out["fee_billed_above_contract"] = (
+                f"SELECT COALESCE(SUM(fee_paise - (CASE {cases} ELSE 0 END)), 0) {captures}"
+            )
+        return out
+
+    def accounts_for(self, key: str) -> tuple[str, ...]:
+        if key.startswith("fee_"):
+            return (Account.FEE_EXPENSE.value,)
+        return (key.split("|")[0],)
+
+    def propose(self, wh: Warehouse, brief: Brief) -> Proposal | None:
+        target = brief.unexplained.paise
+        if not target:
+            return None
+
+        matched: dict[str, str] = {}
+        for key, sql in self.candidates(wh, brief).items():
+            try:
+                rows = wh.sql(sql)
+            except Exception:  # noqa: BLE001, S112 - a candidate that will not run is not one
+                continue
+            if rows and rows[0][0] == target:
+                matched[key] = sql
+        if not matched:
+            return None
+
+        claims = {self.accounts_for(k) for k in matched}
+        if len(claims) > 1:
+            return None
+
+        key = min(matched, key=lambda k: (k.count("|") == 0, len(k)))
+        return Proposal(
+            name=key.replace("|", "_from_"),
+            title=f"Movement matching the shortfall: {key}",
+            accounts=self.accounts_for(key),
+            sql=matched[key],
+            rationale=f"{len(matched)} of the candidate slices equal the shortfall, all on the same account",
+            source="searcher",
+        )
+
+
 class ModelProposer:
 
     def __init__(self, client: Any = None, model: str = MODEL) -> None:
@@ -231,6 +335,10 @@ def without(cause: Cause, contracted: dict[str, str]) -> list[Hypothesis]:
     return [h for h in default_hypotheses(contracted) if h.cause is not cause]
 
 
+def refined_by(cause: Cause, contracted: dict[str, str]) -> list[Cause]:
+    return [h.cause for h in default_hypotheses(contracted) if h.refines is cause]
+
+
 def rediscover(
     events: list[EventBase],
     start: date,
@@ -243,5 +351,20 @@ def rediscover(
     close = run_close(events, start, end, contracted, wh, hypotheses=without(cause, contracted))
     if close.residual.paise == 0:
         return close, Verdict(proposal=None, target=close.residual, faults=("nothing was left open",))
-    proposal = proposer.propose(wh, brief_for(close, start, end))
+
+    children = refined_by(cause, contracted)
+    if children:
+        names = ", ".join(str(c) for c in children)
+        return close, Verdict(
+            proposal=None,
+            target=close.residual,
+            faults=(
+                (
+                    f"not independently rediscoverable: {names} refines it, so removing the "
+                    f"parent leaves parent minus child, an arithmetic artifact and not a cause"
+                ),
+            ),
+        )
+
+    proposal = proposer.propose(wh, brief_for(close, start, end, contracted))
     return close, adjudicate(wh, proposal, close)

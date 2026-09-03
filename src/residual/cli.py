@@ -271,12 +271,15 @@ def rediscover(
     week: int = typer.Option(8, help="Which week of the benchmark quarter"),
     cause: str = typer.Option("", help="Hold out one cause only"),
     use_model: bool = typer.Option(False, "--model", help="Let the model propose (needs a key)"),
+    baseline: bool = typer.Option(False, "--baseline", help="Use the naive largest-account proposer"),
+    recorded: str = typer.Option("", help="Replay proposals from a saved JSON file"),
+    every_week: bool = typer.Option(False, "--all-weeks", help="Sweep the whole quarter"),
 ) -> None:
     """Hold out a verifier and see whether a proposal can rediscover it."""
     from datetime import timedelta
 
     from residual.domain.causes import Cause
-    from residual.explain.propose import LargestAccount, ModelProposer
+    from residual.explain.propose import LargestAccount, ModelProposer, Recorded, Searcher
     from residual.explain.propose import rediscover as run
 
     r = _world()
@@ -291,33 +294,54 @@ def rediscover(
     if use_model and not os.environ.get("ANTHROPIC_API_KEY"):
         console.print("[red]--model needs ANTHROPIC_API_KEY. Running the baseline instead.[/]")
         use_model = False
-    proposer = ModelProposer() if use_model else LargestAccount()
-    label = "model" if use_model else "largest-account baseline"
+    if recorded:
+        proposer: Any = Recorded(recorded)
+        label = f"recorded, {Path(recorded).name}"
+    elif use_model:
+        proposer, label = ModelProposer(), "model"
+    elif baseline:
+        proposer, label = LargestAccount(), "largest-account baseline"
+    else:
+        proposer, label = Searcher(), "searcher"
 
     wanted = [c for c in Cause if not cause or str(c) == cause]
     if cause and not wanted:
         raise typer.BadParameter(f"no such cause: {cause}")
 
     console.print(
-        f"\n[bold]Rediscovery[/]  week {week}  {start} .. {end}  [dim]proposer: {label}[/]\n"
+        f"\n[bold]Rediscovery[/]  [dim]proposer: {label}[/]\n"
         "  [dim]One verifier is removed, the books stop closing, and the proposer is asked\n"
         "  what is missing. It is never told the amount it has to match.[/]\n"
     )
 
-    tried = accepted = 0
-    for c in wanted:
-        close, verdict = run(events, start, end, rates, wh, c, proposer)
-        if close.residual.paise == 0:
-            continue
-        tried += 1
-        accepted += verdict.accepted
-        mark = "[green]rediscovered[/]" if verdict.accepted else "[red]missed[/]"
-        console.print(f"  {c!s:26} open {close.residual!s:>16}   {mark}")
-        if not verdict.accepted:
-            console.print(f"  {'':26} [dim]{verdict.reason()[:96]}[/]")
+    weeks = range(BENCHMARK.days // 7) if every_week else [week]
+    tried = accepted = excluded = 0
+    for w in weeks:
+        start = r.start + timedelta(days=w * 7)
+        end = start + timedelta(days=6)
+        for c in wanted:
+            if recorded:
+                proposer.cause = str(c)
+            close, verdict = run(events, start, end, rates, wh, c, proposer)
+            if close.residual.paise == 0:
+                continue
+            if verdict.faults and "not independently rediscoverable" in verdict.faults[0]:
+                excluded += 1
+                if not every_week:
+                    console.print(f"  {c!s:26} [yellow]excluded[/]")
+                    console.print(f"  {'':26} [dim]{verdict.faults[0][:96]}[/]")
+                continue
+            tried += 1
+            accepted += verdict.accepted
+            mark = "[green]rediscovered[/]" if verdict.accepted else "[red]missed[/]"
+            if not every_week or not verdict.accepted:
+                console.print(f"  {c!s:26} open {close.residual!s:>16}   {mark}")
+            if not verdict.accepted:
+                console.print(f"  {'':26} [dim]{verdict.reason()[:96]}[/]")
 
     console.print(
-        f"\n  [bold]{accepted}/{tried}[/] rediscovered."
+        f"\n  [bold]{accepted}/{tried}[/] rediscovered"
+        f" across {len(list(weeks))} week(s), {excluded} excluded by design."
         "\n  [dim]A proposal is accepted only if its SQL is safe, returns one signed integer\n"
         "  in paise, equals the open residual to the rupee, and leaves every account\n"
         "  balanced. The books judge it; nothing else does.[/]"

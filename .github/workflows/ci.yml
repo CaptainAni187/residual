@@ -39,7 +39,9 @@ jobs:
           uv run residual ablate
           uv run residual backtest-forecast --horizon 14
           uv run residual calibration
-          uv run residual rediscover --week 8
+          uv run residual rediscover --all-weeks
+          uv run residual rediscover --all-weeks --baseline
+          uv run residual rediscover --week 8 --recorded tests/fixtures/proposals/week8.json
           uv run residual certify-forecast --days 400
 
       - name: Close a real gateway report against a real bank statement
