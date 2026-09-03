@@ -218,17 +218,26 @@ def live_payments(
 ) -> None:
     """Pull real payments from the Razorpay API and fold them into books."""
     from residual import config
-    from residual.ingest.razorpay import NotConfigured, fetch_payments, payments_to_events
+    from residual.ingest.razorpay import (
+        NotConfigured,
+        fetch_payments,
+        fetch_refunds,
+        payments_to_events,
+    )
     from residual.position.engine import fold
 
     config.load()
     try:
         rows = fetch_payments(count=count)
+        refunds = fetch_refunds(count=count)
     except NotConfigured as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(2) from exc
 
-    console.print(f"\n[bold]Live payments[/]  {len(rows)} row(s) from the Razorpay API\n")
+    console.print(
+        f"\n[bold]Live payments[/]  {len(rows)} payment(s), {len(refunds)} refund(s) "
+        "from the Razorpay API\n"
+    )
     if not rows:
         console.print(
             "  [dim]The account has no payments. Create an order and pay it in test mode,\n"
@@ -237,14 +246,14 @@ def live_payments(
         )
         return
 
-    events = payments_to_events(rows, strict=False)
+    events = payments_to_events(rows, refunds=refunds, strict=False)
     balances = fold(events)
     balances.check(complete=False)
 
     captured = sum(1 for e in events if e.type == "payment_captured")
     failed = sum(1 for e in events if e.type == "payment_failed")
-    refunds = sum(1 for e in events if e.type == "refund_issued")
-    console.print(f"  {captured} captured, {failed} failed, {refunds} refund(s)")
+    returned = sum(1 for e in events if e.type == "refund_issued")
+    console.print(f"  {captured} captured, {failed} failed, {returned} refund(s)")
     console.print(f"  [bold]{len(events)}[/] ledger events, every entry sums to zero\n")
 
     for account, amount in sorted(balances.items()):

@@ -1,0 +1,23 @@
+{
+  "entity": "collection",
+  "count": 1,
+  "items": [
+    {
+      "acquirer_data": {
+        "arn": "10000000000000"
+      },
+      "amount": 250000,
+      "batch_id": null,
+      "created_at": 1788433848,
+      "currency": "INR",
+      "entity": "refund",
+      "id": "rfnd_TXXi3HfTT2SGFN",
+      "notes": [],
+      "payment_id": "pay_TXXQcIDUWOdQ8v",
+      "receipt": null,
+      "speed_processed": "normal",
+      "speed_requested": "normal",
+      "status": "processed"
+    }
+  ]
+}

@@ -261,19 +261,21 @@ Orders created through the live test-mode API, paid through real Checkout, then
 pulled back from `GET /v1/payments` and folded into books:
 
 ```
-Live payments  5 row(s) from the Razorpay API
+Live payments  5 payment(s), 1 refund(s) from the Razorpay API
 
-  4 captured, 1 failed, 0 refund(s)
-  5 ledger events, every entry sums to zero
+  4 captured, 1 failed, 1 refund(s)
+  6 ledger events, every entry sums to zero
 
   fee_expense                      INR 195.68
-  gateway_receivable             INR 9,553.10
+  gateway_receivable             INR 7,053.10
   gst_input_credit                  INR 35.22
+  refunds                        INR 2,500.00
   revenue                       -INR 9,784.00
 ```
 
-Four captures across four banks, one genuine failure, all reconciled. The failed
-payment moves no money and posts nothing, which is checked rather than assumed.
+Four captures across four banks, one genuine failure, one partial refund, all
+reconciled. The failed payment moves no money and posts nothing, which is
+checked rather than assumed.
 
 ### What the real response caught
 
@@ -305,6 +307,26 @@ Worth noting *how* this was caught. The books balanced perfectly under the wrong
 mapping — a mis-split is not an imbalance, so the zero-residual check was blind
 to it. What exposed it was the effective rate: 2.72% is not a netbanking rate
 that exists anywhere.
+
+### The refund it caught next
+
+A payment carries `amount_refunded`, and reading a refund out of that field is
+the obvious shortcut. It is also wrong in three ways at once: the refund gets an
+invented id, it gets dated at the **capture** rather than at the refund, and two
+partial refunds on one payment collapse into a single event. Refunds usually
+land days after the capture, so dating them at the capture files them in the
+wrong weekly close — in a bi-temporal ledger that is not a rounding problem, it
+is the wrong answer.
+
+So refunds are read from `/v1/refunds` and keep their own id, their own date and
+their own speed. A payment that reports `amount_refunded` with no matching
+refund record is **refused**, rather than quietly synthesised:
+
+```
+payment(s) ['pay_...'] report a refund but no refund record was supplied;
+synthesising one would invent its id and date it at the capture, which files it
+in the wrong window
+```
 
 Customer email, phone, VPA and notes are dropped at the ingest boundary and never
 reach the ledger. `test_customer_details_never_reach_the_ledger` serialises every
@@ -380,7 +402,7 @@ input-credit risk. `residual.__all__` lists all 46 names.
 ## Commands
 
 ```bash
-uv run pytest                          # 515 tests
+uv run pytest                          # 519 tests
 uv run residual demo                   # guided walkthrough
 uv run residual serve                  # dashboard
 uv run residual close --week 8 --show-sql

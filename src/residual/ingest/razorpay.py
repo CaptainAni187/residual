@@ -5,7 +5,7 @@ import os
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from residual.ledger import events as ev
 from residual.ledger.money import Money
@@ -229,7 +229,10 @@ def _strip_pii(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def payments_to_events(
-    rows: Iterable[dict[str, Any]], currency: str = "INR", strict: bool = True
+    rows: Iterable[dict[str, Any]],
+    refunds: Iterable[dict[str, Any]] | None = None,
+    currency: str = "INR",
+    strict: bool = True,
 ) -> list[ev.EventBase]:
     rows = [_strip_pii(r) for r in rows]
 
@@ -298,21 +301,77 @@ def payments_to_events(
                 )
             )
 
-        refunded = _money(row.get("amount_refunded"))
-        if refunded.paise:
-            out.append(
-                ev.RefundIssued(
-                    event_id=f"{payment_id}:refund",
-                    occurred_at=when,
-                    recorded_at=when,
-                    refund_id=f"rfnd_{payment_id}",
-                    payment_id=payment_id,
-                    amount=refunded,
-                )
+    out.extend(refunds_to_events(refunds or (), currency=currency, strict=strict))
+
+    if strict:
+        seen = {e.payment_id for e in out if isinstance(e, ev.RefundIssued)}
+        missing = sorted(
+            str(r.get("id"))
+            for r in rows
+            if _money(r.get("amount_refunded")).paise and str(r.get("id")) not in seen
+        )
+        if missing:
+            raise UnsupportedRow(
+                f"payment(s) {missing} report a refund but no refund record was supplied; "
+                f"synthesising one would invent its id and date it at the capture, "
+                f"which files it in the wrong window"
             )
 
     out.sort(key=lambda e: (e.occurred_at, e.event_id))
     return out
+
+
+def refunds_to_events(
+    rows: Iterable[dict[str, Any]], currency: str = "INR", strict: bool = True
+) -> list[ev.RefundIssued]:
+    rows = [_strip_pii(r) for r in rows]
+
+    foreign = sorted({str(r.get("currency") or currency) for r in rows} - {currency})
+    if strict and foreign:
+        raise UnsupportedRow(
+            f"this ledger is {currency}-only and the refunds include {foreign}"
+        )
+    if not strict:
+        rows = [r for r in rows if str(r.get("currency") or currency) == currency]
+
+    out: list[ev.RefundIssued] = []
+    for row in rows:
+        if str(row.get("status")) == "failed":
+            continue
+        refund_id = str(row.get("id") or "")
+        payment_id = str(row.get("payment_id") or "")
+        if not refund_id or not payment_id:
+            raise UnsupportedRow("a refund row carries no id or no payment_id")
+        when = _day(row.get("created_at"), datetime.now(tz=UTC).date())
+        fast = str(row.get("speed_processed")) == "optimum"
+        speed: Literal["normal", "instant"] = "instant" if fast else "normal"
+        out.append(
+            ev.RefundIssued(
+                event_id=refund_id,
+                occurred_at=when,
+                recorded_at=when,
+                refund_id=refund_id,
+                payment_id=payment_id,
+                amount=_money(row.get("amount")),
+                speed=speed,
+            )
+        )
+    return out
+
+
+def fetch_refunds(count: int = 100, timeout: float = 30.0) -> list[dict[str, Any]]:
+    key_id, key_secret = _credentials()
+
+    import httpx
+
+    response = httpx.get(
+        f"{API}/refunds",
+        params={"count": min(count, 100)},
+        auth=(key_id, key_secret),
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return list(response.json().get("items", []))
 
 
 def fetch_payments(count: int = 100, timeout: float = 30.0) -> list[dict[str, Any]]:
