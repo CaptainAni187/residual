@@ -215,3 +215,116 @@ def probe(timeout: float = 30.0) -> dict[str, Any]:
         "payments_visible": int(payload.get("count", len(items))),
         "sample_fields": sorted(items[0]) if items else [],
     }
+
+
+PII_FIELDS = frozenset({"email", "contact", "vpa", "customer_id", "card_id", "notes"})
+
+PAYMENT_STATES = frozenset({"created", "authorized", "captured", "refunded", "failed"})
+
+# Razorpay reports `fee` inclusive of `tax`; this ledger keeps them apart.
+
+
+def _strip_pii(row: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in row.items() if k not in PII_FIELDS}
+
+
+def payments_to_events(
+    rows: Iterable[dict[str, Any]], currency: str = "INR", strict: bool = True
+) -> list[ev.EventBase]:
+    rows = [_strip_pii(r) for r in rows]
+
+    foreign = sorted({str(r.get("currency") or currency) for r in rows} - {currency})
+    if strict and foreign:
+        raise UnsupportedRow(
+            f"this ledger is {currency}-only and the payments include {foreign}; "
+            f"a foreign amount recorded at par is silently wrong, so it is refused"
+        )
+    unknown = sorted({str(r.get("status")) for r in rows} - PAYMENT_STATES)
+    if strict and unknown:
+        raise UnsupportedRow(f"unmapped payment status {unknown}")
+    if not strict:
+        rows = [
+            r for r in rows
+            if str(r.get("currency") or currency) == currency
+            and str(r.get("status")) in PAYMENT_STATES
+        ]
+
+    out: list[ev.EventBase] = []
+    for row in rows:
+        payment_id = str(row.get("id") or "")
+        if not payment_id:
+            raise UnsupportedRow("a payment row carries no id")
+        status = str(row.get("status") or "")
+        when = _day(row.get("created_at"), datetime.now(tz=UTC).date())
+        order_id = str(row.get("order_id") or "")
+        method_name = str(row.get("method") or "")
+        method = _METHODS.get(method_name)
+        if method is None:
+            if strict:
+                raise UnsupportedRow(f"unmapped payment method {method_name!r} on {payment_id}")
+            continue
+
+        if status in {"captured", "refunded"}:
+            billed = _money(row.get("fee"))
+            tax = _money(row.get("tax"))
+            if tax.paise > billed.paise:
+                raise UnsupportedRow(
+                    f"{payment_id}: tax {tax} exceeds the fee {billed} it is part of"
+                )
+            out.append(
+                ev.PaymentCaptured(
+                    event_id=payment_id,
+                    occurred_at=when,
+                    recorded_at=when,
+                    payment_id=payment_id,
+                    order_id=order_id,
+                    gross=_money(row.get("amount")),
+                    method=method,
+                    fee=billed - tax,
+                    tax=tax,
+                )
+            )
+        elif status == "failed":
+            out.append(
+                ev.PaymentFailed(
+                    event_id=payment_id,
+                    occurred_at=when,
+                    recorded_at=when,
+                    payment_id=payment_id,
+                    order_id=order_id,
+                    gross=_money(row.get("amount")),
+                    method=method,
+                    error_code=str(row.get("error_code") or "unknown"),
+                )
+            )
+
+        refunded = _money(row.get("amount_refunded"))
+        if refunded.paise:
+            out.append(
+                ev.RefundIssued(
+                    event_id=f"{payment_id}:refund",
+                    occurred_at=when,
+                    recorded_at=when,
+                    refund_id=f"rfnd_{payment_id}",
+                    payment_id=payment_id,
+                    amount=refunded,
+                )
+            )
+
+    out.sort(key=lambda e: (e.occurred_at, e.event_id))
+    return out
+
+
+def fetch_payments(count: int = 100, timeout: float = 30.0) -> list[dict[str, Any]]:
+    key_id, key_secret = _credentials()
+
+    import httpx
+
+    response = httpx.get(
+        PAYMENTS_URL,
+        params={"count": min(count, 100)},
+        auth=(key_id, key_secret),
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return list(response.json().get("items", []))

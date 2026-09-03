@@ -25,6 +25,7 @@ htmlcov/
 .claude/
 
 # Generated output
+scripts/checkout/
 data/*.jsonl
 data/*.duckdb
 reports/*.json

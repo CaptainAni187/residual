@@ -213,6 +213,109 @@ def ablate() -> None:
 
 
 @app.command()
+def live_payments(
+    count: int = typer.Option(100, help="How many payments to pull"),
+) -> None:
+    """Pull real payments from the Razorpay API and fold them into books."""
+    from residual import config
+    from residual.ingest.razorpay import NotConfigured, fetch_payments, payments_to_events
+    from residual.position.engine import fold
+
+    config.load()
+    try:
+        rows = fetch_payments(count=count)
+    except NotConfigured as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2) from exc
+
+    console.print(f"\n[bold]Live payments[/]  {len(rows)} row(s) from the Razorpay API\n")
+    if not rows:
+        console.print(
+            "  [dim]The account has no payments. Create an order and pay it in test mode,\n"
+            "  then run this again. Settlements need an approved KYC and are not reachable\n"
+            "  from a fresh test account.[/]"
+        )
+        return
+
+    events = payments_to_events(rows, strict=False)
+    balances = fold(events)
+    balances.check(complete=False)
+
+    captured = sum(1 for e in events if e.type == "payment_captured")
+    failed = sum(1 for e in events if e.type == "payment_failed")
+    refunds = sum(1 for e in events if e.type == "refund_issued")
+    console.print(f"  {captured} captured, {failed} failed, {refunds} refund(s)")
+    console.print(f"  [bold]{len(events)}[/] ledger events, every entry sums to zero\n")
+
+    for account, amount in sorted(balances.items()):
+        if amount.paise:
+            console.print(f"  {account!s:24} {amount!s:>18}")
+
+    console.print(
+        "\n  [dim]Customer email, phone, VPA and notes are dropped at the boundary;\n"
+        "  test_customer_details_never_reach_the_ledger holds that.[/]"
+    )
+
+
+@app.command()
+def rediscover(
+    week: int = typer.Option(8, help="Which week of the benchmark quarter"),
+    cause: str = typer.Option("", help="Hold out one cause only"),
+    use_model: bool = typer.Option(False, "--model", help="Let the model propose (needs a key)"),
+) -> None:
+    """Hold out a verifier and see whether a proposal can rediscover it."""
+    from datetime import timedelta
+
+    from residual.domain.causes import Cause
+    from residual.explain.propose import LargestAccount, ModelProposer
+    from residual.explain.propose import rediscover as run
+
+    r = _world()
+    events = r.log.events()
+    wh = Warehouse.build(events)
+    rates = _contracted()
+    start = r.start + timedelta(days=week * 7)
+    end = start + timedelta(days=6)
+
+    import os
+
+    if use_model and not os.environ.get("ANTHROPIC_API_KEY"):
+        console.print("[red]--model needs ANTHROPIC_API_KEY. Running the baseline instead.[/]")
+        use_model = False
+    proposer = ModelProposer() if use_model else LargestAccount()
+    label = "model" if use_model else "largest-account baseline"
+
+    wanted = [c for c in Cause if not cause or str(c) == cause]
+    if cause and not wanted:
+        raise typer.BadParameter(f"no such cause: {cause}")
+
+    console.print(
+        f"\n[bold]Rediscovery[/]  week {week}  {start} .. {end}  [dim]proposer: {label}[/]\n"
+        "  [dim]One verifier is removed, the books stop closing, and the proposer is asked\n"
+        "  what is missing. It is never told the amount it has to match.[/]\n"
+    )
+
+    tried = accepted = 0
+    for c in wanted:
+        close, verdict = run(events, start, end, rates, wh, c, proposer)
+        if close.residual.paise == 0:
+            continue
+        tried += 1
+        accepted += verdict.accepted
+        mark = "[green]rediscovered[/]" if verdict.accepted else "[red]missed[/]"
+        console.print(f"  {c!s:26} open {close.residual!s:>16}   {mark}")
+        if not verdict.accepted:
+            console.print(f"  {'':26} [dim]{verdict.reason()[:96]}[/]")
+
+    console.print(
+        f"\n  [bold]{accepted}/{tried}[/] rediscovered."
+        "\n  [dim]A proposal is accepted only if its SQL is safe, returns one signed integer\n"
+        "  in paise, equals the open residual to the rupee, and leaves every account\n"
+        "  balanced. The books judge it; nothing else does.[/]"
+    )
+
+
+@app.command()
 def memo(
     week: Annotated[int, typer.Option(help="Which week to write up (0-based)")] = 8,
     show_calls: Annotated[bool, typer.Option(help="List the tool calls behind it")] = False,

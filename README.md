@@ -16,7 +16,8 @@ uv run residual demo        # guided walkthrough, eight steps
 uv run residual serve       # same thing in a browser
 ```
 
-No API key or network needed for anything here.
+No API key, no account, no network. Nothing in this project calls an external
+service.
 
 ## Example
 
@@ -83,7 +84,7 @@ captured. Regenerate with `residual evaluate` and `residual ablate`.
 |---|---|---|
 | Linkage layer vs `narration LIKE '%utr%'` | 1 settlement reported missing | 23 reported missing |
 | Two-pass ambiguity detection vs greedy | 0 silently wrong, 2 abstained | 2 silently wrong, 0 abstained |
-| Verifier-grounded memo vs raw-ledger prose | 0/78 figures untraceable | 66/66 untraceable |
+| Grounded memo vs prose off the raw ledger | 0/78 figures untraceable | 66/66 untraceable |
 
 One settlement was actually lost. Substring matching calls another 22 lost too —
 they arrived with a truncated or missing reference. Greedy matching never
@@ -92,10 +93,14 @@ out of order it is wrong with the same confidence it has when it's right.
 
 ## Design notes
 
-**The model never asserts a number.** It starts with no figures at all and can
-only learn one by calling a verifier that runs real SQL. The memo is then parsed
-back and every rupee figure matched against what those calls returned. A figure
-with no source means the memo is withheld.
+**Nothing that writes prose is allowed to assert a number.** The memo writer
+starts with no figures at all and can only obtain one by calling a verifier that
+runs real SQL. The finished text is then parsed back and every rupee figure
+matched against what those calls returned. A figure with no source means the
+memo is withheld rather than printed. The gate is a boundary, not a property of
+whoever is writing: swap in a different writer and it is held to the same rule,
+which is what `test_an_ungrounded_memo_is_withheld_not_printed` checks by
+handing it a writer that fabricates.
 
 **Uncertainty lives in one place.** Linkage — deciding which bank credit cleared
 which payout — is the only genuinely uncertain step, and the arithmetic never
@@ -118,8 +123,8 @@ table so a verifier reasoning about timing does it in the SQL it hands back.
 
 ## Calibrated against published rates
 
-`residual calibration` checks each simulator parameter against what the model
-emits.
+`residual calibration` checks each simulator parameter against what the
+simulator emits.
 
 | parameter | published | simulated | source |
 |---|---|---|---|
@@ -159,10 +164,54 @@ Point-estimate accuracy is 4.9% MAPE at fourteen days on an ordinary merchant,
 15.5% on the benchmark quarter — which deliberately holds a risk hold, a lost
 payout, a partial settlement and a dispute cluster.
 
-The model also reports when it has stopped working. When volume halved in
+The forecast also reports when it has stopped working. When volume halved in
 testing, the method absorbed it: the interval widened until the floor sat on the
 new level and reported everything was fine. It was — and it was useless. So the
-signal is the width the model needs to stay honest.
+signal is the width it needs to stay honest.
+
+## Can it find a cause nobody wrote a verifier for
+
+The seventeen verifiers are a fixed registry, so the books close on a world
+whose causes are all known. The interesting case is the one they aren't.
+
+`residual rediscover` removes one verifier. The residual immediately opens by
+exactly what that verifier used to claim, and a proposer is asked what is
+missing. It gets the schema, the accounts in the books, and the causes already
+explained. **It is never told the amount it has to match** —
+`test_the_proposer_is_never_told_the_amount_it_has_to_match` asserts the figure
+does not appear anywhere in the request.
+
+A proposal comes back as a name, the accounts it claims, and one SQL query. It
+is accepted only if all of this holds:
+
+- the SQL passes the same parse-tree validation as every other generated query
+- it returns exactly one row, one column, a signed integer in paise
+- that number equals the open residual to the paise
+- adding its claim leaves **every** account balanced
+
+The last rule is what makes it hard. A proposal can hit the number and still be
+wrong, and the books catch it:
+
+```
+right number, wrong account -> rejected - account(s) still do not balance: fee_expense, refunds
+```
+
+So the proposer may invent an explanation; it cannot make the books agree with
+one. The generator is free and the checker is exact, which is the only shape of
+this I would trust near money.
+
+Nine causes open a non-zero residual in the benchmark week. A naive baseline —
+sum the account with the largest movement — scores **0/9**, which is the point:
+guessing does not pass.
+
+```bash
+uv run residual rediscover --week 8            # baseline
+uv run residual rediscover --week 8 --model    # needs ANTHROPIC_API_KEY
+```
+
+The model arm runs the same adjudication and is covered by tests against a
+stubbed client. I have not run it against the real model — there was no key on
+the machine this was built on, so no score for it is claimed here.
 
 ## Deterministic simulation testing
 
@@ -172,6 +221,7 @@ every delivery: `duplicate_batch`, `crash_and_replay`, `reorder`, `split`,
 
 ```bash
 uv run residual dst --seeds 3000
+uv run residual rediscover --week 8
 ```
 
 The property that matters is convergence — for any schedule of faults the system
@@ -205,6 +255,72 @@ Debits split two ways: charges the bank levied, and the merchant's own spending.
 Counting all of it as bank charges once put ₹3.3L of salary into the cost of the
 payment relationship.
 
+## Real Razorpay data
+
+Orders created through the live test-mode API, paid through real Checkout, then
+pulled back from `GET /v1/payments` and folded into books:
+
+```
+Live payments  5 row(s) from the Razorpay API
+
+  4 captured, 1 failed, 0 refund(s)
+  5 ledger events, every entry sums to zero
+
+  fee_expense                      INR 195.68
+  gateway_receivable             INR 9,553.10
+  gst_input_credit                  INR 35.22
+  revenue                       -INR 9,784.00
+```
+
+Four captures across four banks, one genuine failure, all reconciled. The failed
+payment moves no money and posts nothing, which is checked rather than assumed.
+
+### What the real response caught
+
+Razorpay reports `fee` **inclusive** of `tax`. A ₹7,500 netbanking payment comes
+back as `fee: 17700, tax: 2700`. This ledger keeps the two apart, because GST on
+a fee is reclaimable input credit and the fee itself is not. The first mapping
+passed both through untouched and so charged the GST twice — ₹204 of cost
+against a merchant who was billed ₹177.
+
+The arithmetic settles it, not the documentation:
+
+| payment | gross | billed | fee − tax | rate | GST |
+|---|---|---|---|---|---|
+| BARB_R | ₹7,500.00 | ₹177.00 | ₹150.00 | 2.0000% | 18.00% |
+| PUNB_R | ₹485.00 | ₹11.44 | ₹9.70 | 2.0000% | 17.94% |
+| DLXB | ₹1,299.00 | ₹30.66 | ₹25.98 | 2.0000% | 18.01% |
+| UCBA | ₹500.00 | ₹11.80 | ₹10.00 | 2.0000% | 18.00% |
+
+Exactly 2.0000% four times, from four different banks. Under the other reading
+none of them lands on a rate that exists. The GST column drifts by a paise
+either way because it is rounded per payment, which is the reason money is
+integer paise here and not a float.
+
+`test_every_real_capture_lands_on_the_published_rate` pins both ratios against
+the saved response, and a payment whose tax exceeds the fee containing it is
+refused rather than posted.
+
+Worth noting *how* this was caught. The books balanced perfectly under the wrong
+mapping — a mis-split is not an imbalance, so the zero-residual check was blind
+to it. What exposed it was the effective rate: 2.72% is not a netbanking rate
+that exists anywhere.
+
+Customer email, phone, VPA and notes are dropped at the ingest boundary and never
+reach the ledger. `test_customer_details_never_reach_the_ledger` serialises every
+event and asserts none of it survives; the committed fixture is redacted.
+
+```bash
+uv run python scripts/probe_live.py            # read-only
+uv run python scripts/probe_live.py --write    # create a test order
+uv run python scripts/probe_live.py --checkout # build the pay page
+uv run residual live-payments
+```
+
+Settlements are not reachable from a fresh test account — they need an approved
+KYC — so the settlement side is still exercised only against the simulator and
+the saved recon fixtures.
+
 ## Tax
 
 GST on gateway fees is only claimable if the gateway declared the invoice in
@@ -223,13 +339,48 @@ into the gap; a risk explains cash that will move if nobody chases a filing.
 ## Throughput
 
 `residual benchmark --days 365 --volume 260` — 115,625 events, 505,159 postings,
-₹28.8 Cr across 53 closes, ~40 ms per close, every residual zero. No model is
-called during a close.
+₹28.8 Cr across 53 closes, ~40 ms per close, every residual zero.
+
+## Using it from Python
+
+Everything the CLI does is reachable as a library. `import residual` is lazy —
+it costs about 5 ms and pulls in DuckDB only when you touch something that
+needs it.
+
+```python
+from datetime import date
+
+import residual
+
+events = residual.EventLog.read_jsonl("data/events.jsonl").events()
+books = residual.Warehouse.build(events)
+rates = {"card": "2.00", "upi": "2.36", "netbanking": "2.00", "wallet": "2.00"}
+
+close = residual.run_close(events, date(2026, 3, 2), date(2026, 3, 8), rates, books)
+
+for finding in close.findings:
+    print(f"{finding.cause:28} {finding.amount}")
+print("residual", close.residual, close.closes)
+```
+
+Reading your own files instead of the generated log:
+
+```python
+statement = residual.read_statement("march.pdf")
+recon = residual.read_recon(rows, on=date(2026, 3, 31))
+credit = residual.read_gstr2b("gstr2b_march.json")
+```
+
+The rest of the surface: `Money` and `allocate` for money that never touches a
+float, `fold` and `position_at` for balances, `forecast` and `backtest` for the
+cash floor, `ask` for the question catalogue, `build_pack` and `verify_pack` for
+a sealed close, `restate` for a close replayed as of a cutoff, `assess_tax` for
+input-credit risk. `residual.__all__` lists all 46 names.
 
 ## Commands
 
 ```bash
-uv run pytest                          # 428 tests
+uv run pytest                          # 515 tests
 uv run residual demo                   # guided walkthrough
 uv run residual serve                  # dashboard
 uv run residual close --week 8 --show-sql
@@ -239,11 +390,13 @@ uv run residual dst --seeds 3000
 uv run residual calibration
 uv run residual certify-forecast
 uv run residual outlook --history 400
+uv run residual position
 uv run residual backtest-forecast --horizon 14
 uv run residual memo --week 8
 uv run residual restate-close --week 2
 uv run residual pack --week 8
 uv run residual ask "which settlements never arrived?"
+uv run residual live-payments
 uv run residual bank-statement --file tests/fixtures/statements/hdfc.pdf
 uv run residual ingest --file tests/fixtures/recon_sample.json
 uv run residual simulate-world && uv run residual verify-log
@@ -266,7 +419,17 @@ dst/        fault injection and the simulation harness
 web/        dashboard
 ```
 
-Package dependencies are acyclic; production code never imports the simulator.
+Three layers, enforced by tests rather than convention:
+
+- **core** — `domain`, `ledger`, `recon`, `position`, `explain`, `ingest`. The
+  product. Never imports anything below.
+- **harness** — `simulate`, `dst`, `eval`. The evidence that the core works.
+  Not needed to use it.
+- **surface** — `cli`, `web`. Presentation only, and the only layer allowed to
+  reach for the sample world.
+
+`test_core_never_imports_the_harness_or_a_surface` and
+`test_the_package_graph_is_acyclic` hold that shape in place.
 
 ## Security
 
@@ -285,14 +448,18 @@ Package dependencies are acyclic; production code never imports the simulator.
 - The world is generated. Cause-level scoring is measured against ground truth
   the simulator produced, which is the only way to grade explanations and also
   the ceiling on what those scores mean.
-- The Razorpay adapter authenticates against the live test-mode API, but a fresh
-  test account has no settled transactions to read — settlements need an
-  approved KYC.
+- Payments are read from the live test-mode API and reconciled. Settlements are
+  not: they need an approved KYC, so that half is exercised against the
+  simulator and saved recon fixtures only.
 - Scanned statements need OCR, which isn't attempted.
 - Single currency, single merchant. No subscriptions, payment links or virtual
   accounts.
 - Form 26AS figures for the TDS check are supplied by hand; there's no parser.
 - The dashboard is read-only and unauthenticated. It binds to localhost.
+- The question layer answers from a fixed catalogue of queries unless a model is
+  configured. Outside that catalogue it says so rather than guessing.
+- `rediscover --model` has never been run against the real model. The loop and
+  its adjudication are tested against a stubbed client; the score is not.
 
 ## Licence
 

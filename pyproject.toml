@@ -1,14 +1,14 @@
 [project]
 name = "residual"
 version = "0.1.0"
-description = "Books that prove themselves — an audit-grade cash variance controller."
+description = "Cash variance controller for merchant settlements."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.10",
     "duckdb>=1.1",
     "polars>=1.17",
-    "pyarrow>=18.0",   # DuckDB ingests Polars frames through Arrow
+    "pyarrow>=18.0",
     "typer>=0.15",
     "rich>=13.9",
     "pdfplumber>=0.11.10",
@@ -17,7 +17,6 @@ dependencies = [
 [project.optional-dependencies]
 agent = ["anthropic>=0.42"]
 web = ["fastapi>=0.115", "uvicorn>=0.34", "jinja2>=3.1"]
-match = ["scipy>=1.14", "ortools>=9.11", "rapidfuzz>=3.10"]
 
 [project.scripts]
 residual = "residual.cli:main"

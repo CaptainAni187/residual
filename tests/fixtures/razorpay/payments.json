@@ -1,0 +1,30 @@
+{
+  "entity": "collection",
+  "count": 4,
+  "items": [
+    {
+      "id": "pay_TXXcaptured01", "entity": "payment", "amount": 129900, "currency": "INR",
+      "status": "captured", "order_id": "order_TXX9L9C7iWBADl", "method": "upi",
+      "amount_refunded": 0, "captured": true, "fee": 3066, "tax": 468,
+      "created_at": 1788431900, "email": "buyer@example.com", "contact": "+919999999999",
+      "vpa": "buyer@okhdfcbank", "notes": {"internal": "do not ship to the ledger"}
+    },
+    {
+      "id": "pay_TXXcard0002", "entity": "payment", "amount": 750000, "currency": "INR",
+      "status": "captured", "order_id": "order_TXX9LaspctlAs5", "method": "card",
+      "amount_refunded": 250000, "captured": true, "fee": 17700, "tax": 2700,
+      "created_at": 1788432000, "email": "second@example.com", "contact": "+919888888888"
+    },
+    {
+      "id": "pay_TXXfailed003", "entity": "payment", "amount": 48500, "currency": "INR",
+      "status": "failed", "order_id": "order_TXX9LTe529OxwK", "method": "netbanking",
+      "amount_refunded": 0, "captured": false, "fee": 0, "tax": 0,
+      "created_at": 1788432100, "error_code": "BAD_REQUEST_ERROR"
+    },
+    {
+      "id": "pay_TXXauthed004", "entity": "payment", "amount": 99900, "currency": "INR",
+      "status": "authorized", "order_id": "order_TXXpending", "method": "upi",
+      "amount_refunded": 0, "captured": false, "fee": 0, "tax": 0, "created_at": 1788432200
+    }
+  ]
+}
