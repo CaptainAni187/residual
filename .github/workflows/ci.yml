@@ -64,3 +64,11 @@ jobs:
           [ "$code" = "2" ] || { echo "expected exit 2, got $code"; exit 1; }
           echo "$out" | grep -q "Traceback" && { echo "stack trace leaked"; exit 1; }
           echo "refused cleanly"
+
+      - name: The published dashboard is not stale
+        run: |
+          uv run residual export --out site
+          git diff --exit-code -- site/ || {
+            echo "site/ is out of date -- run 'uv run residual export' and commit the result"
+            exit 1
+          }

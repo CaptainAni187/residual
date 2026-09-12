@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: residual
+    runtime: static
+    buildCommand: pip install uv && uv sync --all-extras && uv run residual export --out site
+    staticPublishPath: site

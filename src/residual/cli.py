@@ -267,6 +267,21 @@ def live_payments(
 
 
 @app.command()
+def export(
+    out: str = typer.Option("site", help="Directory to write the static dashboard into"),
+) -> None:
+    """Build a self-contained static dashboard from a full run."""
+    from residual.web.export import write
+
+    page = write(Path(out))
+    size = page.stat().st_size / 1024
+    console.print(
+        f"\n  wrote [bold]{page}[/] ({size:.0f} KB, data inlined)"
+        f"\n  [dim]open it directly, or deploy the directory as a static site[/]\n"
+    )
+
+
+@app.command()
 def rediscover(
     week: int = typer.Option(8, help="Which week of the benchmark quarter"),
     cause: str = typer.Option("", help="Hold out one cause only"),

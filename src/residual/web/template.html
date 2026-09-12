@@ -1,0 +1,334 @@
+<title>Residual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+:root{
+  --paper:#f7f7f5; --rule:#d6d6d0; --rule-hard:#26262a;
+  --ink:#1b1b1f; --ink-2:#55555d; --ink-3:#85858e;
+  --bar:#243b7a; --bar-soft:#9aa8c9;
+  --red:#b42318; --red-bg:#faeceb;
+  --green:#0a6b3d;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --sans:"IBM Plex Sans",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#101014; --rule:#2c2c33; --rule-hard:#6d6d78;
+    --ink:#e6e6e9; --ink-2:#a0a0aa; --ink-3:#73737e;
+    --bar:#7d9be0; --bar-soft:#404d6b;
+    --red:#f04438; --red-bg:#2b1614;
+    --green:#3dc27e;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#101014; --rule:#2c2c33; --rule-hard:#6d6d78;
+  --ink:#e6e6e9; --ink-2:#a0a0aa; --ink-3:#73737e;
+  --bar:#7d9be0; --bar-soft:#404d6b;
+  --red:#f04438; --red-bg:#2b1614;
+  --green:#3dc27e;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--mono);font-size:13px;line-height:1.5;
+  -webkit-font-smoothing:antialiased}
+.sheet{max-width:940px;margin:0 auto;padding:0 20px 60px}
+@media (max-width:560px){.sheet{padding:0 14px 48px}.masthead{padding-top:24px}}
+.n{font-variant-numeric:tabular-nums}
+p{font-family:var(--sans);font-size:13.5px;line-height:1.6;color:var(--ink-2)}
+
+.masthead{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 28px;
+  padding:34px 0 9px;border-bottom:2px solid var(--rule-hard)}
+.masthead h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.2em;text-transform:uppercase}
+.masthead .of{font-size:12px;color:var(--ink-2);letter-spacing:.02em;font-family:var(--sans)}
+.masthead .built{margin-left:auto;font-size:11px;color:var(--ink-3)}
+.rubric{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));
+  border-bottom:1px solid var(--rule)}
+.rubric div{padding:9px 0;font-size:11.5px;color:var(--ink-2);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.rubric b{color:var(--ink);font-weight:500}
+
+h2{margin:0;font-size:11.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink);padding:26px 0 0}
+.band{border-bottom:1px solid var(--rule);padding-bottom:22px}
+
+.periods{display:flex;flex-wrap:wrap;gap:0;margin:12px 0 0;border:1px solid var(--rule);width:fit-content;
+  max-width:100%}
+.periods button{font:inherit;font-size:11.5px;padding:5px 9px;background:none;color:var(--ink-2);
+  border:0;border-right:1px solid var(--rule);cursor:pointer}
+.periods button:last-child{border-right:0}
+.periods button:hover{color:var(--ink);background:var(--red-bg)}
+.periods button[aria-pressed="true"]{background:var(--rule-hard);color:var(--paper);font-weight:600}
+.periods button:focus-visible{outline:2px solid var(--bar);outline-offset:-2px}
+
+.arith{margin-top:16px;border-top:1px solid var(--rule)}
+.arith div{display:flex;justify-content:space-between;align-items:baseline;gap:20px;
+  padding:6px 0;border-bottom:1px solid var(--rule)}
+.arith .lbl{font-size:12px;color:var(--ink-2);min-width:0}
+.arith .amt{font-size:15px;font-variant-numeric:tabular-nums;letter-spacing:-.01em;
+  flex:0 0 auto;white-space:nowrap}
+.arith .tot{border-bottom:2px solid var(--rule-hard)}
+.arith .tot .lbl,.arith .tot .amt{color:var(--ink);font-weight:600}
+
+.ledger{width:100%;border-collapse:collapse;margin-top:14px}
+.ledger caption{caption-side:top;text-align:left;font-size:11px;color:var(--ink-3);
+  padding-bottom:6px;letter-spacing:.06em;text-transform:uppercase}
+.ledger th{text-align:left;font-size:10.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);padding:0 8px 5px 0;border-bottom:1px solid var(--rule-hard)}
+.ledger th.r{text-align:right;padding-right:0}
+.ledger th:last-child,.ledger td.note{padding-left:16px}
+.ledger td{padding:0;border-bottom:1px solid var(--rule)}
+.ledger tr.line>td{padding:5px 8px 5px 0;vertical-align:middle;font-size:12.5px}
+.ledger tr.line>td:last-child{padding-right:0}
+.ledger tr.line{cursor:pointer}
+.ledger tr.line:hover{background:var(--red-bg)}
+.ledger td.acct{white-space:nowrap}
+.ledger td.acct .mk{color:var(--red);font-weight:600;padding-right:4px}
+.ledger td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ledger td.note{font-family:var(--sans);font-size:12px;color:var(--ink-3);line-height:1.4}
+.gauge{display:block;width:150px;height:11px;position:relative}
+.gauge s{position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:var(--rule-hard);
+  opacity:.45;text-decoration:none}
+.gauge i{position:absolute;top:0;height:11px;min-width:2px;background:var(--bar)}
+.gauge i.dn{background:var(--bar-soft)}
+.ledger tr.total td{padding:7px 8px 7px 0;font-weight:600;border-bottom:2px solid var(--rule-hard)}
+.ledger tr.total td.r{color:var(--green)}
+.query{background:var(--paper)}
+.query td{padding:0 0 14px}
+.query pre{margin:6px 0 0;padding:9px 11px;border-left:2px solid var(--rule-hard);
+  background:rgba(127,127,127,.07);font-size:11px;line-height:1.6;color:var(--ink-2);
+  overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+.query .esc{display:inline-block;font-size:11px;color:var(--red);border:1px solid var(--red);
+  padding:1px 6px;margin-bottom:4px}
+.query .cmt{font-family:var(--sans);font-size:12.5px;color:var(--ink-2);margin:0}
+.tick{font-size:11.5px;color:var(--ink-3);padding-top:8px}
+
+.keyvals{margin-top:12px;border-top:1px solid var(--rule)}
+.keyvals div{display:grid;grid-template-columns:1fr auto;gap:18px;padding:5px 0;
+  border-bottom:1px solid var(--rule);align-items:baseline}
+.keyvals .k{font-family:var(--sans);font-size:12.5px;color:var(--ink-2)}
+.keyvals .v{font-variant-numeric:tabular-nums;font-size:13px;font-weight:500}
+.keyvals .v.zero{color:var(--green)}
+
+.compare{margin-top:12px;border-top:1px solid var(--rule);padding:0;list-style:none}
+.compare li{padding:11px 0;border-bottom:1px solid var(--rule)}
+.compare .subj{font-size:12px;color:var(--ink);margin-bottom:5px}
+.compare .vs{display:grid;grid-template-columns:1fr 1fr;gap:14px;font-size:11.5px}
+.compare .vs span{color:var(--ink-2)}
+.compare .vs b{display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:500;margin-bottom:1px}
+.compare .vs .kept{color:var(--green)}
+.compare .vs .lost{color:var(--red)}
+.compare .say{font-family:var(--sans);font-size:12px;color:var(--ink-3);margin:6px 0 0;line-height:1.45}
+@media (max-width:620px){.compare .vs{grid-template-columns:1fr}}
+
+.aside{margin-top:14px;padding:12px 0 0;border-top:1px solid var(--rule)}
+.aside p{margin:0;max-width:74ch}
+.aside code{font-family:var(--mono);font-size:12px;color:var(--ink)}
+.aside strong{color:var(--ink);font-weight:600}
+
+.colophon{display:flex;flex-wrap:wrap;gap:8px 22px;align-items:baseline;padding-top:20px;
+  font-size:11px;color:var(--ink-3)}
+.colophon a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule-hard)}
+.flip{margin-left:auto;font:inherit;font-size:11px;background:none;border:1px solid var(--rule);
+  color:var(--ink-3);padding:3px 8px;cursor:pointer}
+.flip:hover{color:var(--ink);border-color:var(--rule-hard)}
+.wide{overflow-x:auto}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="sheet">
+<div class="masthead">
+  <h1>Residual</h1>
+  <span class="of">cash variance statement &mdash; simulated merchant on a payment gateway</span>
+  <span class="built" id="built"></span>
+</div>
+<div class="rubric" id="rubric"></div>
+
+<div class="band">
+  <h2>Period</h2>
+  <div class="periods" id="periods" role="group" aria-label="Select period"></div>
+  <div class="arith">
+    <div><span class="lbl">Gross captured</span><span class="amt n" id="gross"></span></div>
+    <div><span class="lbl">Less cash landed in bank</span><span class="amt n" id="landed"></span></div>
+    <div class="tot"><span class="lbl">Variance to account for</span><span class="amt n" id="gap"></span></div>
+  </div>
+  <div class="wide">
+    <table class="ledger">
+      <caption>Account of the variance &mdash; select any line for the query behind it</caption>
+      <thead><tr>
+        <th>Cause</th><th style="width:150px">&nbsp;</th>
+        <th class="r">Amount</th><th style="width:40%">Basis</th>
+      </tr></thead>
+      <tbody id="lines"></tbody>
+    </table>
+  </div>
+  <div class="tick" id="tick"></div>
+</div>
+
+<div class="band">
+  <h2>Verification</h2>
+  <div class="keyvals" id="keyvals"></div>
+  <div class="aside"><p>Scored against the ground truth of a generated merchant. That is the only way
+  to grade an explanation, and it is also the ceiling on what these figures mean.</p></div>
+</div>
+
+<div class="band">
+  <h2>Against the live Razorpay API</h2>
+  <div class="wide"><table class="ledger" id="live"></table></div>
+  <div class="aside" id="livenote"></div>
+</div>
+
+<div class="band">
+  <h2>What each layer is worth</h2>
+  <ul class="compare" id="compare"></ul>
+</div>
+
+<div class="colophon">
+  <span id="stack"></span>
+  <a href="https://github.com/CaptainAni187/residual">github.com/CaptainAni187/residual</a>
+  <button class="flip" id="flip" type="button">invert</button>
+</div>
+</div>
+
+<script>
+const DATA = __DATA__;
+const el = (id) => document.getElementById(id);
+const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function rupees(p) {
+  const neg = p < 0, s = Math.abs(p);
+  const pa = String(s % 100).padStart(2, "0");
+  let w = String(Math.floor(s / 100)), out = w;
+  if (w.length > 3) {
+    const tail = w.slice(-3); let head = w.slice(0, -3); const parts = [];
+    while (head.length > 2) { parts.unshift(head.slice(-2)); head = head.slice(0, -2); }
+    if (head) parts.unshift(head);
+    out = parts.join(",") + "," + tail;
+  }
+  return (neg ? "(" : "") + out + "." + pa + (neg ? ")" : "");
+}
+const count = (n) => n.toLocaleString("en-IN");
+
+let period = 8, shown = null;
+
+function render(i) {
+  period = i; shown = null;
+  const w = DATA.weeks[i];
+  el("gross").textContent = rupees(w.gross);
+  el("landed").textContent = rupees(w.landed);
+  el("gap").textContent = rupees(w.gap);
+  [...el("periods").children].forEach((b, n) => b.setAttribute("aria-pressed", n === i));
+
+  const peak = Math.max(...w.findings.map((f) => Math.abs(f.amount)), 1);
+  el("lines").innerHTML = w.findings.map((f, n) => {
+    const span = Math.abs(f.amount) / peak * 49;
+    const mark = f.amount < 0
+      ? `<i class="dn" style="right:50%;width:${span}%"></i>`
+      : `<i style="left:50%;width:${span}%"></i>`;
+    return `<tr class="line" data-n="${n}" tabindex="0" role="button" aria-expanded="false">
+        <td class="acct">${f.alarming ? '<span class="mk" aria-hidden="true">!</span>' : ""}${esc(f.cause)}</td>
+        <td><span class="gauge" aria-hidden="true"><s></s>${mark}</span></td>
+        <td class="r">${rupees(f.amount)}</td>
+        <td class="note">${esc(f.note || "")}</td>
+      </tr>
+      <tr class="query" hidden id="q${n}"><td colspan="4"></td></tr>`;
+  }).join("") + `<tr class="total">
+      <td>Residual</td><td></td><td class="r">${rupees(w.residual)}</td>
+      <td class="note">nothing unaccounted for</td></tr>`;
+
+  el("tick").textContent = `${w.checked} verifiers ran. `
+    + (w.covered ? "Every account's claims sum exactly to its movement, so this cannot be two errors cancelling."
+                 : "A coverage gap is present on this period.");
+
+  el("lines").querySelectorAll("tr.line").forEach((tr) => {
+    const act = () => {
+      const n = +tr.dataset.n, row = el("q" + n), f = DATA.weeks[period].findings[n];
+      if (shown !== null && shown !== n) {
+        el("q" + shown).hidden = true;
+        const old = el("lines").querySelector(`tr.line[data-n="${shown}"]`);
+        if (old) old.setAttribute("aria-expanded", "false");
+      }
+      const opening = row.hidden;
+      if (opening && !row.dataset.done) {
+        row.firstElementChild.innerHTML =
+          (f.alarming ? `<div class="esc">escalate</div>` : "")
+          + `<pre>${esc(f.sql)}</pre>`;
+        row.dataset.done = "1";
+      }
+      row.hidden = !opening;
+      tr.setAttribute("aria-expanded", String(opening));
+      shown = opening ? n : null;
+    };
+    tr.addEventListener("click", act);
+    tr.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); act(); }
+    });
+  });
+}
+
+const m = DATA.meta, e = DATA.evaluation;
+el("built").textContent = "prepared " + DATA.generated;
+el("rubric").innerHTML = [
+  [`${m.days} days`, "period covered"],
+  [`${count(m.events)}`, "events, hash-chained"],
+  [`${count(m.postings)}`, "double-entry postings"],
+  [`${m.verifiers}`, "independent verifiers"],
+].map(([v, k]) => `<div><b class="n">${v}</b> ${k}</div>`).join("");
+
+el("periods").innerHTML = DATA.weeks
+  .map((w) => `<button type="button" aria-pressed="false">${w.start.slice(5)}</button>`).join("");
+[...el("periods").children].forEach((b, i) => b.addEventListener("click", () => render(i)));
+
+const pc = (x) => (x * 100).toFixed(2) + "%";
+el("keyvals").innerHTML = [
+  ["Weekly closes reaching a zero residual", pc(e.close_rate), 1],
+  ["Total rupee error across the quarter", rupees(e.rupee_error), 1],
+  ["Causes reported that ground truth does not contain", pc(e.hallucinated), 1],
+  ["Cause precision", pc(e.precision), 0],
+  ["Cause recall", pc(e.recall), 0],
+  ["Amounts exact to the paise", pc(e.exact), 0],
+  ["Hash-chain head", m.chain_head, 0],
+].map(([k, v, z]) => `<div><span class="k">${k}</span><span class="v n${z ? " zero" : ""}">${v}</span></div>`).join("");
+
+const L = DATA.live;
+el("live").innerHTML = `<caption>Orders raised through the test-mode API, paid through
+  Checkout, read back from GET /v1/payments</caption>
+  <thead><tr><th>Payment</th><th>Bank</th><th>Status</th><th class="r">Amount</th>
+  <th class="r">Billed</th><th class="r">Fee less tax</th><th class="r">Rate</th></tr></thead><tbody>`
+  + L.rows.map((p) => `<tr class="line" style="cursor:default">
+      <td class="acct" style="font-size:11.5px">${esc(p.id)}</td>
+      <td>${esc(p.bank || "—")}</td>
+      <td style="color:${p.status === "captured" ? "var(--green)" : "var(--red)"}">${esc(p.status)}</td>
+      <td class="r">${rupees(p.amount)}</td>
+      <td class="r">${p.billed ? rupees(p.billed) : "—"}</td>
+      <td class="r">${p.billed ? rupees(p.billed - p.tax) : "—"}</td>
+      <td class="r">${p.rate ? (p.rate * 100).toFixed(4) + "%" : "—"}</td>
+    </tr>`).join("") + `</tbody>`;
+
+el("livenote").innerHTML = `<p><strong>The real response caught a bug the simulator never would.</strong>
+  Razorpay reports <code>fee</code> inclusive of <code>tax</code>. This ledger keeps the two apart,
+  because GST on a fee is reclaimable input credit and the fee itself is not, so the first mapping
+  charged the GST twice. The arithmetic settles it rather than the documentation:
+  <code>17700 − 2700 = 15000</code> is exactly <strong>2.0000%</strong> of ₹7,500, and
+  <code>2700 / 15000</code> is exactly <strong>18%</strong> — four captures, four banks, the same
+  rate to four decimal places. The books balanced under the wrong mapping too: a mis-split is not an
+  imbalance, so the zero-residual check was blind to it. What exposed it was the rate.</p>`;
+
+el("compare").innerHTML = DATA.ablations.map((a) => `<li>
+    <div class="subj">${esc(a.name)}</div>
+    <div class="vs">
+      <span class="kept"><b>with</b>${esc(a.ours)}</span>
+      <span class="lost"><b>without</b>${esc(a.ablated)}</span>
+    </div>
+    <p class="say">${esc(a.verdict)}</p>
+  </li>`).join("");
+
+el("stack").textContent = "Python 3.13 · DuckDB · Polars · Pydantic · FastAPI · Hypothesis";
+el("flip").addEventListener("click", () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const at = document.documentElement.getAttribute("data-theme") || (dark ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", at === "dark" ? "light" : "dark");
+});
+
+render(8);
+</script>
