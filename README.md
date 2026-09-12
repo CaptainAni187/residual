@@ -111,8 +111,9 @@ rather than accuracy.
 **Two clocks.** Every event carries `occurred_at` and `recorded_at`. A chargeback
 happens on the day of the payment and is notified a fortnight later, so a close
 signed on the 10th can't contain it. Replaying with a `known_by` cutoff
-reproduces the close as it could actually have been run. Nine of thirteen closes
-in the benchmark move after signing.
+reproduces the close as it could actually have been run. Six of thirteen closes
+in the benchmark change composition after signing; none of them change the gap
+total. The period still adds up — what moves is what it was made of.
 
 **Money is integer paise.** No code path builds money from a float. Currency is
 carried on the value, so a stray USD line can't enter an INR position.
@@ -404,7 +405,7 @@ into the gap; a risk explains cash that will move if nobody chases a filing.
 ## Throughput
 
 `residual benchmark --days 365 --volume 260` — 115,625 events, 505,159 postings,
-₹28.8 Cr across 53 closes, ~40 ms per close, every residual zero.
+₹28.77 Cr across 53 closes, ~50 ms per close, every residual zero.
 
 ## Using it from Python
 
