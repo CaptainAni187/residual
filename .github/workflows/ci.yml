@@ -40,6 +40,7 @@ jobs:
           uv run residual backtest-forecast --horizon 14
           uv run residual calibration
           uv run residual rediscover --all-weeks
+          uv run residual investigate --all-weeks
           uv run residual rediscover --all-weeks --baseline
           uv run residual rediscover --week 8 --recorded tests/fixtures/proposals/week8.json
           uv run residual certify-forecast --days 400

@@ -133,6 +133,19 @@ h2{margin:0;font-size:11.5px;font-weight:600;letter-spacing:.14em;text-transform
   color:var(--ink-3);padding:3px 8px;cursor:pointer}
 .flip:hover{color:var(--ink);border-color:var(--rule-hard)}
 .wide{overflow-x:auto}
+.trace{margin-top:12px;border-top:1px solid var(--rule)}
+.trace .st{display:grid;grid-template-columns:22px 1fr auto;gap:12px;padding:6px 0;
+  border-bottom:1px solid var(--rule);align-items:baseline}
+.trace .i{color:var(--ink-3);font-size:11px;font-variant-numeric:tabular-nums}
+.trace .t{font-size:12px;color:var(--ink);overflow-wrap:anywhere}
+.trace .t em{font-style:normal;color:var(--ink-3)}
+.trace .got{font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink)}
+.trace .fin{display:grid;grid-template-columns:22px 1fr auto;gap:12px;padding:8px 0;
+  border-bottom:2px solid var(--rule-hard);align-items:baseline;font-weight:600}
+.trace .fin .got{color:var(--green)}
+.verdictsql{margin:10px 0 0;padding:9px 11px;border-left:2px solid var(--rule-hard);
+  background:rgba(127,127,127,.07);font-size:11px;line-height:1.6;color:var(--ink-2);
+  overflow-x:auto;white-space:pre-wrap;word-break:break-word}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 
@@ -170,6 +183,14 @@ h2{margin:0;font-size:11.5px;font-weight:600;letter-spacing:.14em;text-transform
   <div class="keyvals" id="keyvals"></div>
   <div class="aside"><p>Scored against the ground truth of a generated merchant. That is the only way
   to grade an explanation, and it is also the ceiling on what these figures mean.</p></div>
+</div>
+
+<div class="band">
+  <h2>The agent</h2>
+  <div class="keyvals" id="agentstat"></div>
+  <div class="aside" id="agentsay"></div>
+  <div class="trace" id="trace"></div>
+  <pre class="verdictsql" id="agentsql"></pre>
 </div>
 
 <div class="band">
@@ -289,6 +310,35 @@ el("keyvals").innerHTML = [
   ["Amounts exact to the paise", pc(e.exact), 0],
   ["Hash-chain head", m.chain_head, 0],
 ].map(([k, v, z]) => `<div><span class="k">${k}</span><span class="v n${z ? " zero" : ""}">${v}</span></div>`).join("");
+
+const A = DATA.agent;
+el("agentstat").innerHTML = [
+  ["Held-out causes the agent recovered unaided", `${A.solved} / ${A.attempted}`, 1],
+  ["Causes excluded as refinement artifacts", String(A.excluded), 0],
+  ["Tool calls per investigation (min / median / max)",
+   `${A.calls.min} / ${A.calls.median} / ${A.calls.max}`, 0],
+].map(([k, v, z]) => `<div><span class="k">${k}</span><span class="v n${z ? " zero" : ""}">${v}</span></div>`).join("");
+
+el("agentsay").innerHTML = `<p>One verifier is removed and the books stop closing. The analyst is
+  given a toolbelt over the ledger &mdash; which accounts are short, what kind of event moved an
+  account, what a fee would have been at the contracted rate &mdash; and has to work out the
+  mechanism. It is <strong>not</strong> told what explains the shortfall, and its answer is only
+  accepted if the query it hands back returns that exact figure <em>and</em> leaves every account
+  balanced. Hitting the number on the wrong account is refused. Below is a real transcript, the
+  longest in the quarter: the case of <code>${esc(A.example.cause)}</code>, short by
+  <strong>${rupees(A.example.short_by)}</strong>.</p>`;
+
+el("trace").innerHTML = A.example.steps.map((s, i) => {
+  const arg = Object.entries(s.args).map(([k, v]) => `${k}=${v}`).join(", ");
+  return `<div class="st"><span class="i">${i + 1}</span>
+    <span class="t">${esc(s.tool)}<em>(${esc(arg)})</em></span>
+    <span class="got">${s.found ? esc(s.found) : ""}</span></div>`;
+}).join("") + `<div class="fin"><span class="i">&rarr;</span>
+    <span class="t">${esc(A.example.proposal ? A.example.proposal.name : "no proposal")}
+    <em>on ${esc(A.example.proposal ? A.example.proposal.accounts.join(", ") : "—")}</em></span>
+    <span class="got">${esc(A.example.verdict.replace(/^accepted - /, ""))}</span></div>`;
+
+el("agentsql").textContent = A.example.proposal ? A.example.proposal.sql : "";
 
 const L = DATA.live;
 el("live").innerHTML = `<caption>Orders raised through the test-mode API, paid through

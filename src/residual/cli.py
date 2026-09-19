@@ -282,6 +282,103 @@ def export(
 
 
 @app.command()
+def investigate(
+    week: int = typer.Option(8, help="Which week of the benchmark quarter"),
+    cause: str = typer.Option("", help="Hold out one cause only"),
+    provider: str = typer.Option(
+        "", help="Put a model in the driver's seat: anthropic, groq, gemini, grok, openrouter"
+    ),
+    model: str = typer.Option("", help="Override the provider's default model"),
+    every_week: bool = typer.Option(False, "--all-weeks", help="Sweep the whole quarter"),
+    show: bool = typer.Option(False, "--trace", help="Print every tool call"),
+) -> None:
+    """Remove a verifier and let an agent work out what is missing."""
+    import os
+
+    from residual.agents.loop import PROVIDERS, Analyst, ModelDriver, OpenAIDriver
+    from residual.agents.tasks import rediscover_with_agent
+    from residual.domain.causes import Cause
+
+    r = _world()
+    events = r.log.events()
+    wh = Warehouse.build(events)
+    rates = _contracted()
+
+    known = ["anthropic", *sorted(PROVIDERS)]
+    if provider and provider not in known:
+        raise typer.BadParameter(f"unknown provider {provider!r}; known: {', '.join(known)}")
+
+    needs = "ANTHROPIC_API_KEY" if provider == "anthropic" else (
+        PROVIDERS[provider]["env"] if provider else ""
+    )
+    if needs and not os.environ.get(needs):
+        console.print(
+            f"[red]{provider} needs {needs} in the environment. Using the analyst instead.[/]"
+        )
+        provider = ""
+
+    def make_driver():
+        if provider == "anthropic":
+            return ModelDriver(model=model or ModelDriver.name)
+        if provider:
+            return OpenAIDriver(provider=provider, model=model)
+        return Analyst()
+
+    label = f"{provider} ({model})" if provider and model else (provider or "analyst")
+
+    wanted = [c for c in Cause if not cause or str(c) == cause]
+    if cause and not wanted:
+        raise typer.BadParameter(f"no such cause: {cause}")
+
+    console.print(
+        f"\n[bold]Investigation[/]  [dim]driver: {label}[/]\n"
+        "  [dim]A verifier is removed, the books stop closing, and the agent is given a\n"
+        "  toolbelt over the ledger. It is not told what explains the shortfall.[/]\n"
+    )
+
+    weeks = range(0, BENCHMARK.days, 7) if every_week else [week * 7]
+    tried = solved = excluded = 0
+    budget: list[int] = []
+    for offset in weeks:
+        start = r.start + timedelta(days=offset)
+        end = start + timedelta(days=6)
+        for c in wanted:
+            driver = make_driver()
+            found = rediscover_with_agent(events, start, end, rates, wh, c, driver)
+            if found.close.residual.paise == 0:
+                continue
+            if found.run.stopped == "excluded":
+                excluded += 1
+                if not every_week:
+                    console.print(f"  {c!s:26} [yellow]excluded[/]  [dim]refinement artifact[/]")
+                continue
+            tried += 1
+            solved += found.solved
+            budget.append(found.run.calls)
+            mark = "[green]solved[/]" if found.solved else "[red]missed[/]"
+            if not every_week or not found.solved:
+                console.print(
+                    f"  {c!s:26} short {found.close.residual!s:>16}"
+                    f"   {found.run.calls:2} calls   {mark}"
+                )
+            if show and not every_week:
+                for i, step in enumerate(found.run.steps, 1):
+                    arg = ", ".join(f"{k}={v}" for k, v in step.args.items())
+                    got = step.result.get("amount", "") if step.ok else step.result
+                    console.print(f"        [dim]{i:2}[/] {step.tool}({arg}) [dim]{got}[/]")
+                console.print(f"        [dim] ->[/] {found.verdict.reason()[:88]}")
+
+    order = sorted(budget) or [0]
+    console.print(
+        f"\n  [bold]{solved}/{tried}[/] solved, {excluded} excluded by design."
+        f"\n  [dim]tool calls per investigation: {order[0]} min,"
+        f" {order[len(order) // 2]} median, {order[-1]} max[/]"
+        "\n  [dim]A proposal is accepted only if its SQL returns the shortfall exactly and\n"
+        "  leaves every account balanced. Right number, wrong account is refused.[/]"
+    )
+
+
+@app.command()
 def rediscover(
     week: int = typer.Option(8, help="Which week of the benchmark quarter"),
     cause: str = typer.Option("", help="Hold out one cause only"),

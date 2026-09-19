@@ -98,6 +98,70 @@ def live_payments() -> dict[str, Any]:
     }
 
 
+def agent_sweep(
+    events: Any, start: date, warehouse: Warehouse, contracted: dict[str, str]
+) -> dict[str, Any]:
+    from residual.agents.loop import Analyst
+    from residual.agents.tasks import rediscover_with_agent
+    from residual.domain.causes import Cause
+
+    attempted = solved = excluded = 0
+    calls: list[int] = []
+    best: Any = None
+    for offset in range(0, BENCHMARK.days, 7):
+        s = start + timedelta(days=offset)
+        e = s + timedelta(days=6)
+        for cause in Cause:
+            found = rediscover_with_agent(
+                events, s, e, contracted, warehouse, cause, Analyst()
+            )
+            if found.close.residual.paise == 0:
+                continue
+            if found.run.stopped == "excluded":
+                excluded += 1
+                continue
+            attempted += 1
+            solved += found.solved
+            calls.append(found.run.calls)
+            if best is None or found.run.calls > best.run.calls:
+                best = found
+
+    ordered = sorted(calls)
+    example = {
+        "cause": str(best.cause),
+        "short_by": best.close.residual.paise,
+        "steps": [
+            {
+                "tool": step.tool,
+                "args": step.args,
+                "found": step.result.get("amount")
+                if step.ok and isinstance(step.result, dict) and "amount" in step.result
+                else None,
+            }
+            for step in best.run.steps
+        ],
+        "proposal": {
+            "name": best.run.proposal.name,
+            "accounts": list(best.run.proposal.accounts),
+            "sql": best.run.proposal.sql,
+        }
+        if best.run.proposal
+        else None,
+        "verdict": best.verdict.reason(),
+    }
+    return {
+        "attempted": attempted,
+        "solved": solved,
+        "excluded": excluded,
+        "calls": {
+            "min": ordered[0],
+            "median": ordered[len(ordered) // 2],
+            "max": ordered[-1],
+        },
+        "example": example,
+    }
+
+
 def build(live: dict[str, Any] | None = None) -> dict[str, Any]:
     result = simulate(BENCHMARK)
     result.require_all_scenarios_fired()
@@ -147,6 +211,7 @@ def build(live: dict[str, Any] | None = None) -> dict[str, Any]:
             "rupee_error": report.rupee_error.paise,
         },
         "ablations": ablations,
+        "agent": agent_sweep(events, result.start, warehouse, contracted),
         "live": live if live is not None else live_payments(),
     }
 

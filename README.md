@@ -170,92 +170,102 @@ testing, the method absorbed it: the interval widened until the floor sat on the
 new level and reported everything was fine. It was — and it was useless. So the
 signal is the width it needs to stay honest.
 
-## Can it find a cause nobody wrote a verifier for
+## An agent that investigates what the verifiers missed
 
-The seventeen verifiers are a fixed registry, so the books close on a world
-whose causes are all known. The interesting case is the one they aren't.
+The close itself is deliberately not agentic. Its value is that it is
+deterministic and provable, and putting a model in that path would be a
+downgrade. But one task here is irreducibly open-ended: when the books do not
+close, somebody has to work out why — query, look, form a hypothesis, query
+again.
 
-`residual rediscover` removes a verifier. The residual immediately opens by
-exactly what that verifier used to claim, and a proposer is asked what is
-missing. It comes back with a name, the accounts it claims, and one SQL query,
-which is accepted only if **all** of this holds:
+`residual investigate` removes a verifier. The residual opens by exactly what
+that verifier used to claim, and an agent is handed a toolbelt over the ledger:
 
-- the SQL passes the same parse-tree validation as every other generated query
-- it returns exactly one row, one column, a signed integer in paise
-- that number equals the open residual to the paise
-- adding its claim leaves **every** account balanced
+| tool | what it answers |
+|---|---|
+| `unbalanced_accounts` | which accounts are short, and by how much |
+| `event_types_touching` | what kind of event moved an account |
+| `account_movement` | net movement on one account, or one slice of it |
+| `fee_at_contracted_rate` | what the fee should have been under the contract |
+| `fee_as_billed` | what the gateway actually charged |
+| `run_query` | arbitrary read-only SQL, validated on the parse tree |
 
-The last rule is what makes it hard. A proposal can hit the number and still be
-wrong, and the books catch it:
+It has to name the mechanism and hand back one query. The answer is accepted
+only if that query returns the shortfall **to the paise** and adding its claim
+leaves **every** account balanced. Hitting the number on the wrong account is
+refused.
+
+### A real transcript
+
+The longest investigation in the quarter — `fee_rate_increase`, short by ₹455.90:
 
 ```
-right number, wrong account -> rejected - account(s) still do not balance: fee_expense, refunds
+ 1  unbalanced_accounts()
+ 2  account_movement(fee_expense)                        INR 18,241.14
+ 3  event_types_touching(fee_expense)
+ 4  account_movement(fee_expense, payment_captured)      INR 18,241.14
+ 5  account_movement(fee_expense, settlement_executed)        INR 0.00
+ 6  fee_at_contracted_rate()                             INR 17,785.24
+ 7  fee_as_billed()                                      INR 18,241.14
+ -> accepted - INR 455.90 on fee_expense
 ```
+
+It establishes that all of `fee_expense` moved on capture and none on
+settlement, then prices those captures at the contracted rate and compares that
+against what was billed. The difference is the overcharge. None of it is a fixed
+script — steps 4 and 5 exist because step 3 said those were the event types
+worth looking at.
 
 ### The result
 
-Every removable cause, every week of the benchmark quarter:
-
-| proposer | rediscovered | wrongly accepted |
+| driver | solved | wrongly accepted |
 |---|---|---|
-| largest moving account | 0 / 81 | 0 |
-| slice-and-contract searcher | **81 / 81** | **0** |
+| largest moving account (baseline) | 0 / 87 | 0 |
+| `Analyst` — deterministic policy over the toolbelt | **87 / 87** | **0** |
+
+Median 2 tool calls, 7 at worst. A further 13 cases are excluded by design, for
+a reason worth stating: `captured_not_yet_settled` claims the whole receivable
+and `bank_holiday_delay` *refines* it, so removing the parent leaves *parent
+minus child* — an arithmetic artifact rather than a cause anyone would name.
+`test_the_refinement_artifact_is_the_parent_minus_the_child` proves that
+identity instead of asserting it.
 
 ```bash
-uv run residual rediscover --all-weeks
-uv run residual rediscover --all-weeks --baseline
+uv run residual investigate --week 8 --cause fee_rate_increase --trace
+uv run residual investigate --all-weeks
 ```
 
-No model and no API key. The searcher enumerates a hypothesis space built from
-what a merchant actually holds — every account, every account crossed with the
-event type that moved it, and, given the contract, the fee priced at the
-contracted rate, the fee as billed, and the difference between them. It runs
-each candidate and keeps the ones equal to the shortfall.
+### Putting a model in the same seat
 
-### Why this is not fitting to the answer
+The driver is the only swappable part. `ModelDriver` speaks Anthropic's tool-use
+API; `OpenAIDriver` speaks the OpenAI chat-completions shape, which covers Groq,
+Gemini, Grok and OpenRouter — several of which have a free tier, so the model arm
+can be measured without a paid key.
 
-The obvious objection is that the searcher is told the shortfall and hunts for
-something matching it. It is told — a merchant knows what they are short. Two
-things stop that from being enough:
-
-- **The partition still has to hold.** A candidate that hits the number on the
-  wrong account is rejected, which is the failure shown above.
-- **The match is not ambiguous.** Across all 81 cases a mean of 1.7 candidates
-  equalled the shortfall, at most 4 — and they **never once disagreed about
-  which account they claimed**. `test_matching_candidates_never_disagree_about_the_account`
-  checks that every week. Where nothing matches, the searcher returns no
-  proposal rather than its closest guess.
-
-### The one it cannot do, and why that is not a failure
-
-`captured_not_yet_settled` claims the whole receivable account, and
-`bank_holiday_delay` **refines** it — subtracts from it. Remove the parent and
-the residual is *parent minus child*, which is an arithmetic artifact, not a
-cause anybody would name. So `rediscover` excludes any cause another verifier
-refines, and says why:
-
-```
-captured_not_yet_settled   excluded
-  not independently rediscoverable: bank_holiday_delay refines it, so removing
-  the parent leaves parent minus child, which is an artifact and not a cause
+```bash
+uv run residual investigate --all-weeks --provider groq      # GROQ_API_KEY
+uv run residual investigate --all-weeks --provider gemini    # GEMINI_API_KEY
+uv run residual investigate --all-weeks --provider anthropic # ANTHROPIC_API_KEY
 ```
 
-`test_the_refinement_artifact_is_the_parent_minus_the_child` proves the identity
-rather than asserting it.
+Whichever drives, the tools, the transcript and the adjudicator are identical, so
+the numbers are comparable. Nothing a driver says is believed until the books
+agree with it.
 
-### The model arm
+### Two things to be straight about
 
-A `ModelProposer` runs the identical adjudication over the same brief, minus the
-shortfall — `test_the_proposer_is_never_told_the_amount_it_has_to_match`
-serialises the whole request and asserts the figure appears nowhere in it. It is
-covered by tests against a stubbed client and needs a key to run for real.
+**The agent is told the shortfall.** It calls `unbalanced_accounts` and learns
+which account is short and by how much. That is the observable a controller
+actually has — you know you are short, you do not know why. What it is never
+told is the *mechanism*, which is the part it has to find.
 
-One-shot proposals written by a language model without the shortfall and without
-the ability to probe first are recorded in `tests/fixtures/proposals/week8.json`
-and replayed in CI: **6 of 9, 0 wrongly accepted**. Both misses were the two fee
-causes, which are not recoverable from the postings table by any slice at all —
-they need the contract. That is a limit of proposing blind, and it is the reason
-the searcher gets to look first.
+**`Analyst` is a deterministic policy over the tools, not a language model.** It
+perceives, decides, acts and observes in a real loop with a real transcript, and
+that loop is what the 87/87 measures. The model drivers sit in the same seat with
+the same tools and the same adjudicator; they are covered by tests against
+stubbed clients and need an API key to run for real, so **no score is claimed for
+any model here.** The architecture is the point: the generator is swappable, the
+checker is exact.
 
 ## Deterministic simulation testing
 
@@ -446,7 +456,7 @@ input-credit risk. `residual.__all__` lists all 47 names.
 ## Commands
 
 ```bash
-uv run pytest                          # 531 tests
+uv run pytest                          # 558 tests
 uv run residual demo                   # guided walkthrough
 uv run residual serve                  # dashboard
 uv run residual close --week 8 --show-sql

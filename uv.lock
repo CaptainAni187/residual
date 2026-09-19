@@ -1312,6 +1312,9 @@ dependencies = [
 agent = [
     { name = "anthropic" },
 ]
+live = [
+    { name = "httpx" },
+]
 web = [
     { name = "fastapi" },
     { name = "jinja2" },
@@ -1334,6 +1337,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'agent'", specifier = ">=0.42" },
     { name = "duckdb", specifier = ">=1.1" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.115" },
+    { name = "httpx", marker = "extra == 'live'", specifier = ">=0.28" },
     { name = "jinja2", marker = "extra == 'web'", specifier = ">=3.1" },
     { name = "pdfplumber", specifier = ">=0.11.10" },
     { name = "polars", specifier = ">=1.17" },
@@ -1343,7 +1347,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.15" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.34" },
 ]
-provides-extras = ["agent", "web"]
+provides-extras = ["agent", "live", "web"]
 
 [package.metadata.requires-dev]
 dev = [

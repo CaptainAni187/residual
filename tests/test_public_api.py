@@ -13,7 +13,7 @@ import residual
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "residual"
 
-CORE = {"domain", "ledger", "recon", "position", "explain", "ingest"}
+CORE = {"domain", "ledger", "recon", "position", "explain", "ingest", "agents"}
 HARNESS = {"simulate", "dst", "eval"}
 SURFACE = {"web"}
 
