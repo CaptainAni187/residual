@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
-from residual.agents.chat import Chat
 from residual.explain.close import Close, Finding
 from residual.explain.grounding import check
 from residual.ledger.money import Money
@@ -16,6 +16,16 @@ Rules you must not break:
 - Three sentences at most: what happened, whether it is normal, what to do.
 - Plain English. No jargon, no bullet points, no preamble, no sign-off.
 - If it needs escalating, say who should be chased and for what."""
+
+
+class Speaker(Protocol):
+
+    @property
+    def ready(self) -> bool: ...
+
+    def describe(self) -> str: ...
+
+    def say(self, system: str, prompt: str, max_tokens: int = 400) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,9 +78,8 @@ def brief(finding: Finding, close: Close) -> str:
     )
 
 
-def explain(finding: Finding, close: Close, chat: Chat | None = None) -> Explanation:
-    chat = chat or Chat()
-    if not chat.ready:
+def explain(finding: Finding, close: Close, chat: Speaker | None = None) -> Explanation:
+    if chat is None or not chat.ready:
         return Explanation(
             str(finding.cause), fallback(finding, close), True, "offline",
             "written from the verifier's own output, so every figure is sourced",
