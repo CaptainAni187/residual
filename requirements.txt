@@ -1,0 +1,7 @@
+duckdb>=1.1
+fastapi>=0.115
+pydantic>=2.10
+python-multipart>=0.0.20
+rich>=13.9
+typer>=0.15
+httpx>=0.28

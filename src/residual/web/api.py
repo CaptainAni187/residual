@@ -198,6 +198,29 @@ async def close_upload(
     return _shape(token, session, close)
 
 
+@router.post("/demo", response_model=CloseOut)
+def demo_close(week: int = 8) -> CloseOut:
+    from datetime import timedelta
+
+    from residual.simulate.presets import BENCHMARK
+    from residual.simulate.world import simulate
+
+    world = simulate(BENCHMARK)
+    events = world.log.events()
+    start = world.start + timedelta(days=max(0, min(week, 12)) * 7)
+    session = Session(
+        events=events,
+        contracted={str(m): rate for m, rate in BENCHMARK.base_rates},
+        start=start,
+        end=start + timedelta(days=6),
+        source=f"generated merchant, week {week}",
+    )
+    _reap()
+    token = uuid.uuid4().hex
+    _SESSIONS[token] = session
+    return _shape(token, session, session.close())
+
+
 class ExplainIn(BaseModel):
     token: str
     cause: str

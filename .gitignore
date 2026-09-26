@@ -34,6 +34,13 @@ reports/*.html
 !data/.gitkeep
 !reports/.gitkeep
 
+# Node / Next.js
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+.vercel/
+
 # OS / editor
 .DS_Store
 .idea/
