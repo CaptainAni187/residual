@@ -16,6 +16,10 @@ from residual.simulate.world import simulate
 
 app = FastAPI(title="Residual")
 
+from residual.web.api import router as _api
+
+app.include_router(_api)
+
 _STATE: dict[str, Any] = {}
 
 
