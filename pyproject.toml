@@ -7,8 +7,6 @@ requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.10",
     "duckdb>=1.1",
-    "polars>=1.17",
-    "pyarrow>=18.0",
     "typer>=0.15",
     "rich>=13.9",
     "pdfplumber>=0.11.10",

@@ -1,6 +1,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -9,7 +12,6 @@ from functools import partial
 from typing import Any
 
 import duckdb
-import polars as pl
 
 from residual.domain.calendar import add_bank_days, is_bank_day
 from residual.ledger.events import EventBase, SettlementExecuted
@@ -132,40 +134,61 @@ def _paise(v: Any) -> int | None:
     return v.paise if isinstance(v, Money) else None
 
 
-_EVENT_COLS: list[tuple[str, Any]] = [
-    ("seq", pl.Int64), ("event_id", pl.Utf8), ("type", pl.Utf8),
-    ("occurred_at", pl.Date), ("recorded_at", pl.Date), ("entity_id", pl.Utf8),
-    ("counterparty", pl.Utf8), ("method", pl.Utf8), ("amount_paise", pl.Int64),
-    ("fee_paise", pl.Int64), ("tax_paise", pl.Int64), ("tds_paise", pl.Int64),
-    ("utr", pl.Utf8), ("narration", pl.Utf8), ("detail", pl.Utf8),
+_EVENT_COLS: list[tuple[str, str]] = [
+    ("seq", "BIGINT"), ("event_id", "VARCHAR"), ("type", "VARCHAR"),
+    ("occurred_at", "DATE"), ("recorded_at", "DATE"), ("entity_id", "VARCHAR"),
+    ("counterparty", "VARCHAR"), ("method", "VARCHAR"), ("amount_paise", "BIGINT"),
+    ("fee_paise", "BIGINT"), ("tax_paise", "BIGINT"), ("tds_paise", "BIGINT"),
+    ("utr", "VARCHAR"), ("narration", "VARCHAR"), ("detail", "VARCHAR"),
 ]
-_POSTING_COLS: list[tuple[str, Any]] = [
-    ("seq", pl.Int64), ("event_id", pl.Utf8), ("event_type", pl.Utf8),
-    ("occurred_at", pl.Date), ("recorded_at", pl.Date), ("account", pl.Utf8),
-    ("amount_paise", pl.Int64), ("ref", pl.Utf8), ("memo", pl.Utf8),
+_POSTING_COLS: list[tuple[str, str]] = [
+    ("seq", "BIGINT"), ("event_id", "VARCHAR"), ("event_type", "VARCHAR"),
+    ("occurred_at", "DATE"), ("recorded_at", "DATE"), ("account", "VARCHAR"),
+    ("amount_paise", "BIGINT"), ("ref", "VARCHAR"), ("memo", "VARCHAR"),
 ]
-_COVER_COLS: list[tuple[str, Any]] = [
-    ("settlement_id", pl.Utf8), ("utr", pl.Utf8),
-    ("payment_id", pl.Utf8), ("settled_on", pl.Date),
+_COVER_COLS: list[tuple[str, str]] = [
+    ("settlement_id", "VARCHAR"), ("utr", "VARCHAR"),
+    ("payment_id", "VARCHAR"), ("settled_on", "DATE"),
 ]
-_CALENDAR_COLS: list[tuple[str, Any]] = [
-    ("d", pl.Date), ("is_bank_day", pl.Boolean), ("t2_naive", pl.Date),
-    ("t2_actual", pl.Date), ("slipped_days", pl.Int32),
+_CALENDAR_COLS: list[tuple[str, str]] = [
+    ("d", "DATE"), ("is_bank_day", "BOOLEAN"), ("t2_naive", "DATE"),
+    ("t2_actual", "DATE"), ("slipped_days", "INTEGER"),
 ]
+
+
+def _wire(value: Any) -> Any:
+    return value.isoformat() if isinstance(value, date) else value
 
 
 def _insert(
     con: duckdb.DuckDBPyConnection,
     table: str,
     rows: list[tuple[Any, ...]],
-    cols: list[tuple[str, Any]],
+    cols: list[tuple[str, str]],
 ) -> None:
     if not rows:
         return
-    frame = pl.DataFrame(  # noqa: F841 -- referenced by name in the SQL below
-        rows, schema=dict(cols), orient="row"
-    )
-    con.execute(f"INSERT INTO {table} SELECT * FROM frame")
+
+    names = [name for name, _ in cols]
+    spec = "{" + ", ".join(f"'{name}': '{kind}'" for name, kind in cols) + "}"
+    handle, path = tempfile.mkstemp(suffix=".jsonl", prefix=f"residual-{table}-")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(
+                    json.dumps(
+                        {name: _wire(value) for name, value in zip(names, row, strict=True)},
+                        ensure_ascii=False,
+                    )
+                )
+                fh.write("\n")
+        con.execute(
+            f"INSERT INTO {table} SELECT {', '.join(names)} FROM "
+            f"read_json(?, columns={spec}, format='newline_delimited')",
+            [path],
+        )
+    finally:
+        os.unlink(path)
 
 
 @dataclass(slots=True)
