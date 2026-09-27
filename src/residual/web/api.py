@@ -31,6 +31,11 @@ class Session:
     start: date
     end: date
     source: str
+    kind: str = "settlement report"
+    rows_in: int = 0
+    rows_used: int = 0
+    statement_rows: int = 0
+    notes: list[str] = field(default_factory=list)
     warehouse: Warehouse = field(init=False)
     born: float = field(default_factory=time.monotonic)
 
@@ -76,7 +81,7 @@ async def _read(upload: UploadFile) -> bytes:
     return blob
 
 
-def _events_from(blob: bytes, name: str) -> list[EventBase]:
+def _events_from(blob: bytes, name: str, tally: dict[str, Any] | None = None) -> list[EventBase]:
     text = blob.decode("utf-8-sig", errors="replace")
     try:
         body = json.loads(text)
@@ -89,9 +94,19 @@ def _events_from(blob: bytes, name: str) -> list[EventBase]:
 
     looks_like_payments = any(str(r.get("entity")) == "payment" for r in items if isinstance(r, dict))
     try:
-        return payments_to_events(items, strict=False) if looks_like_payments else to_events(items, strict=False)
+        events = (
+            payments_to_events(items, strict=False)
+            if looks_like_payments
+            else to_events(items, strict=False)
+        )
     except UnsupportedRow as exc:
         raise HTTPException(422, str(exc)) from exc
+
+    if tally is not None:
+        tally["rows_in"] = len(items)
+        tally["kind"] = "payments export" if looks_like_payments else "settlement recon report"
+        tally["currencies"] = sorted({str(r.get("currency") or "INR") for r in items if isinstance(r, dict)})
+    return events
 
 
 class Finding(BaseModel):
@@ -104,7 +119,19 @@ class Finding(BaseModel):
     sql: str
 
 
+class Inputs(BaseModel):
+    files: list[str]
+    kind: str
+    rows_in: int
+    events: int
+    period: str
+    days: int
+    checks_run: int
+
+
 class CloseOut(BaseModel):
+    inputs: Inputs
+    assumptions: list[str]
     token: str
     source: str
     start: str
@@ -120,8 +147,59 @@ class CloseOut(BaseModel):
     unresolved: list[dict[str, Any]] = Field(default_factory=list)
 
 
+def _assumptions(session: Session, close: Close) -> list[str]:
+    out: list[str] = []
+    if session.contracted:
+        rates = ", ".join(f"{m} at {r}%" for m, r in sorted(session.contracted.items()))
+        out.append(
+            f"Your contracted rates are {rates}. Fees are priced against these, so a "
+            f"difference shows as charged above contract. Change them above if they are wrong."
+        )
+    else:
+        out.append(
+            "No contracted rates were given, so fees are taken as billed and cannot be "
+            "checked for overcharging. Add your rate card to check them."
+        )
+    out.append(
+        f"The period is taken from the file itself, {session.start} to {session.end}. "
+        f"Anything settled after that window counts as still owed, not lost."
+    )
+    if session.statement_rows:
+        out.append(
+            f"Cash landed is read from your bank statement, {session.statement_rows} rows, "
+            f"and each row was checked against the statement's own running balance."
+        )
+    else:
+        out.append(
+            "No bank statement was given, so cash landed is taken from the gateway's own "
+            "record of what it paid out. Add a statement to check that against your bank."
+        )
+    if session.rows_in and session.rows_used < session.rows_in:
+        out.append(
+            f"{session.rows_in - session.rows_used} of {session.rows_in} rows were not in a "
+            f"form this could map, and were left out rather than guessed at."
+        )
+    if close.unresolved:
+        out.append(
+            f"{len(close.unresolved)} bank credit(s) could not be matched to a payout with "
+            f"confidence, so they are listed separately rather than attributed to one."
+        )
+    out.extend(session.notes)
+    return out
+
+
 def _shape(token: str, session: Session, close: Close) -> CloseOut:
     return CloseOut(
+        inputs=Inputs(
+            files=[part.strip() for part in session.source.split("+")],
+            kind=session.kind,
+            rows_in=session.rows_in,
+            events=len(session.events),
+            period=f"{session.start} to {session.end}",
+            days=(session.end - session.start).days + 1,
+            checks_run=close.checked,
+        ),
+        assumptions=_assumptions(session, close),
         token=token,
         source=session.source,
         start=session.start.isoformat(),
@@ -163,7 +241,17 @@ async def close_upload(
     statement: Annotated[UploadFile | None, File(description="Bank statement, CSV")] = None,
     contract: Annotated[str, Form(description="Rates, e.g. card=2.00,upi=2.36")] = "",
 ) -> CloseOut:
-    events = _events_from(await _read(recon), recon.filename or "the recon file")
+    tally: dict[str, Any] = {}
+    events = _events_from(await _read(recon), recon.filename or "the recon file", tally)
+
+    statement_rows = 0
+    notes: list[str] = []
+    foreign = [c for c in tally.get("currencies", []) if c != "INR"]
+    if foreign:
+        notes.append(
+            f"Rows in {', '.join(foreign)} were left out. This works in rupees only, and "
+            f"recording a foreign amount at par would be silently wrong."
+        )
 
     source = recon.filename or "upload"
     if statement is not None and statement.filename:
@@ -172,6 +260,7 @@ async def close_upload(
         except bank.UnreadableStatement as exc:
             raise HTTPException(422, f"could not read {statement.filename}: {exc}") from exc
         source = f"{source} + {statement.filename}"
+        statement_rows = len(parsed.rows)
         if not parsed.reconciles:
             raise HTTPException(
                 422,
@@ -186,6 +275,11 @@ async def close_upload(
         start=days[0],
         end=days[-1],
         source=source,
+        kind=tally.get("kind", "settlement report"),
+        rows_in=tally.get("rows_in", 0),
+        rows_used=len({getattr(e, "payment_id", e.event_id) for e in events}),
+        statement_rows=statement_rows,
+        notes=notes,
     )
     try:
         close = session.close()
@@ -221,6 +315,16 @@ def demo_close(week: int = -1, seed: int = 0) -> CloseOut:
         start=start,
         end=start + timedelta(days=6),
         source=f"generated merchant #{chosen_seed}, week {chosen_week + 1}",
+        kind="generated sample, not your data",
+        rows_in=len(events),
+        rows_used=len(events),
+        notes=[
+            (
+                "This is a generated merchant, not your data. It is built to behave like a "
+                "real one: fees at published rates, T+2 settlement on the RBI calendar, and a "
+                "few things deliberately going wrong so there is something to find."
+            )
+        ],
     )
     _reap()
     token = uuid.uuid4().hex

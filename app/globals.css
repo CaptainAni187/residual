@@ -137,3 +137,24 @@ pre.sql { margin: 0; padding: 11px 13px; background: var(--sunken); border-radiu
 .footer a { color: var(--ink-3); display: inline-flex; }
 .footer a:hover { color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+.strip { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.strip > div { background: var(--paper); padding: 12px 15px; display: grid; gap: 2px; }
+.strip b { font-size: 13.5px; font-weight: 500; overflow-wrap: anywhere; }
+.strip span { font-size: 11.5px; color: var(--ink-3); }
+
+.verdict { border-radius: var(--radius); padding: 16px 18px; border: 1px solid; }
+.verdict.good { background: var(--green-bg); border-color: var(--green); }
+.verdict.warn { background: var(--red-bg); border-color: var(--red); }
+.verdict b { font-size: 15px; }
+.verdict.good b { color: var(--green); }
+.verdict.warn b { color: var(--red); }
+.verdict p { margin: 6px 0 0; font-size: 13.5px; color: var(--ink-2); }
+.verdict ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; }
+.verdict li { margin-bottom: 3px; }
+
+.assumed { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; background: var(--paper); }
+.assumed b { font-size: 14px; }
+.assumed ul { margin: 10px 0 0; padding-left: 18px; }
+.assumed li { font-size: 13px; color: var(--ink-2); margin-bottom: 7px; line-height: 1.55; }

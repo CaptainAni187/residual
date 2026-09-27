@@ -8,7 +8,19 @@ export type Finding = {
   sql: string;
 };
 
+export type Inputs = {
+  files: string[];
+  kind: string;
+  rows_in: number;
+  events: number;
+  period: string;
+  days: number;
+  checks_run: number;
+};
+
 export type CloseResult = {
+  inputs: Inputs;
+  assumptions: string[];
   token: string;
   source: string;
   start: string;

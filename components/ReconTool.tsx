@@ -3,6 +3,7 @@
 import { Fragment, useState } from "react";
 import { Dropzone } from "@/components/Dropzone";
 import { HowLine } from "@/components/HowLine";
+import { Assumed, Verdict, WhatWentIn } from "@/components/Report";
 import { ToolShell } from "@/components/ToolShell";
 import {
   ApiError,
@@ -133,6 +134,8 @@ export function ReconTool({ mode }: { mode: Mode }) {
 
       {result && head && (
         <div className="stack" style={{ marginTop: 26 }}>
+          <WhatWentIn result={result} />
+
           <div className="panel">
             <div className={`headline ${head.tone}`}>{head.big}</div>
             <div className="sub" style={{ marginTop: 4 }}>{head.line}</div>
@@ -192,6 +195,9 @@ export function ReconTool({ mode }: { mode: Mode }) {
               <span className="headline good" style={{ fontSize: 20 }}>{rupees(result.residual_paise)} unexplained</span>
             </div>
           )}
+
+          <Verdict flagged={rows.filter((f) => f.alarming)} total={rows.length} />
+          <Assumed assumptions={result.assumptions} />
 
           <HowLine>
             <p className="sub" style={{ marginBottom: 10 }}>

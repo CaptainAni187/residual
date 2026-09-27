@@ -1,23 +1,62 @@
 # Residual
 
-A reconciliation tool for merchants on a payment gateway. It answers one
-question: money was captured, less money reached the bank, where did the
-difference go?
+**Settlement tools for merchants on a payment gateway.**
+Live at **[residual-beta.vercel.app](https://residual-beta.vercel.app)** — free, and nothing
+you upload is stored.
 
-The output is a decomposition — every cause with an exact rupee amount and the
-SQL query behind it. When it can't explain something it says so instead of
-guessing.
+Money a merchant captures and money that reaches their bank are never the same
+number. Fees, GST, TDS, refunds, disputes, risk holds, route splits and T+2
+timing all sit in between. Working out which of those accounts for the
+difference, by hand, from two exports that do not share a key, is a day's work
+and easy to get wrong.
+
+| tool | what it does | needs |
+|---|---|---|
+| **Settlement Reconciler** | See exactly where the difference between captured and banked went | Razorpay report, bank statement |
+| **Missing Payout Finder** | Find payouts the gateway sent that never reached your bank | Razorpay report |
+| **Fee Checker** | Check what you were charged against your contracted rates | Razorpay report, your rates |
+| **GST Credit Checker** | Find input credit you have paid for but cannot claim yet | Razorpay report, GSTR-2B |
+| **Statement Reader** | Turn a bank statement into a clean table that ties to its own balance | Bank statement CSV |
+| **Ask Your Ledger** | Ask anything about your payments and get the answer | Razorpay report |
+
+Every tool reports what went in, what it checked, what it found, and **what it
+assumed** — so a merchant who knows the assumption is wrong can say so instead of
+trusting a number they cannot see behind.
+
+## Why the answer can be trusted
+
+The difference is not estimated. Every event becomes double-entry postings that
+are validated to sum to zero **when they are constructed**, so the movement of
+all accounts over any window sums to zero too. Rearranged, that gives:
+
+```
+gross captured  −  cash landed  =  Σ movement of every other account
+```
+
+So the breakdown is an accounting identity. A non-zero residual does not mean
+the tool guessed badly — it means an event moved money without a posting, which
+is a bug. Across a 90-day benchmark, 13 of 13 weekly closes reach a residual of
+**₹0.00**.
+
+Two things guard it, and both run in CI:
+
+- the identity is tested over generated event streams **and every sub-window** of
+  them
+- every account's claims are proved to sum exactly to its movement, so a zero
+  residual cannot be two errors cancelling
 
 ## Quick start
 
 ```bash
 uv sync --all-extras
-uv run residual demo        # guided walkthrough, eight steps
-uv run residual serve       # same thing in a browser
+npm install
+
+npm run api     # the engine on :8000
+npm run dev     # the tools on :3000
 ```
 
-No API key, no account, no network. Nothing in this project calls an external
-service.
+No API key and no network are needed. A model key is optional and only changes
+how answers are worded, never what they are.
 
 ## The path a file takes
 
@@ -511,39 +550,46 @@ input-credit risk. `residual.__all__` lists all 47 names.
 ```mermaid
 flowchart LR
   BR["Browser"] --> VER["Vercel, one project"]
-  VER --> NXT["Next.js - workspace<br/>and engine pages"]
+  VER --> NXT["Next.js - six tool pages"]
   VER --> FN["Python function -<br/>FastAPI and DuckDB, 8 MB"]
   FN --> SES["in-memory session<br/>45 min TTL, nothing written to disk"]
   FN -. only if a key is set .-> LLM["Groq / Gemini / Anthropic"]
 ```
 
-The engine runs as a serverless function rather than a second service, so there
-is nothing to wake up and no cold start in front of a visitor. Uploads are held
-in memory for the session and then dropped; `/api/health` reports
-`stores_uploads: false` because that is a property of the code rather than a
-promise.
-
-```bash
-npm install
-npm run api     # FastAPI on :8000
-npm run dev     # Next.js on :3000, proxying /api to it
-```
+The engine is a serverless function rather than a second service, so there is
+nothing to wake up in front of a visitor. Uploads live in memory for the session
+and are then dropped; `/api/health` reports `stores_uploads: false` because that
+is a property of the code rather than a promise.
 
 | route | does |
 |---|---|
-| `POST /api/close` | upload an export and get the close back |
-| `POST /api/demo` | the same, on a generated merchant |
+| `POST /api/close` | reconcile an upload, with the query behind every line |
+| `POST /api/demo` | the same on a freshly generated merchant |
+| `POST /api/statement` | read a bank statement and check it against its own balance |
+| `POST /api/gst` | compare GST paid against what GSTR-2B makes claimable |
 | `POST /api/explain` | one cause in plain English, through the grounding gate |
-| `POST /api/ask` | a question answered from the books |
+| `POST /api/ask` | any question about the books, answered in SQL |
 | `POST /api/investigate` | set the agent on whatever is unexplained |
 | `GET /api/providers` | which model providers have a key |
+
+### Where a model is used, and where it is not
+
+| | model? |
+|---|---|
+| The close, the decomposition, every figure | **no** — arithmetic, no model in the path |
+| Wording an explanation | yes, and every figure it writes is checked against a verifier |
+| Turning a question into SQL | yes, and the SQL is validated on DuckDB's parse tree |
+| The investigation agent | `Analyst` is a deterministic policy; model drivers exist and are untested against a live model |
+
+Nothing a model says is believed until the books agree with it. A model that
+writes a figure no verifier returned has its answer withheld and a written
+fallback used instead.
 
 ## Commands
 
 ```bash
-uv run pytest                          # 558 tests
+uv run pytest                          # 601 tests
 uv run residual demo                   # guided walkthrough
-uv run residual serve                  # dashboard
 uv run residual close --week 8 --show-sql
 uv run residual evaluate
 uv run residual ablate
