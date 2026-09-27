@@ -1,7 +1,10 @@
+# Vercel resolves the Python function from uv.lock, not this file.
+# It is kept so the function's dependency set is legible in one place.
 duckdb>=1.1
 fastapi>=0.115
+httpx>=0.28
+pdfplumber>=0.11.10
 pydantic>=2.10
 python-multipart>=0.0.20
 rich>=13.9
 typer>=0.15
-httpx>=0.28
