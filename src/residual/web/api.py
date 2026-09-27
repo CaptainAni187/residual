@@ -199,21 +199,28 @@ async def close_upload(
 
 
 @router.post("/demo", response_model=CloseOut)
-def demo_close(week: int = 8) -> CloseOut:
+def demo_close(week: int = -1, seed: int = 0) -> CloseOut:
+    import dataclasses
+    import secrets
     from datetime import timedelta
 
     from residual.simulate.presets import BENCHMARK
     from residual.simulate.world import simulate
 
-    world = simulate(BENCHMARK)
+    chosen_seed = seed or secrets.randbelow(9_000_000) + 1_000_000
+    config = dataclasses.replace(BENCHMARK, seed=chosen_seed)
+    world = simulate(config)
     events = world.log.events()
-    start = world.start + timedelta(days=max(0, min(week, 12)) * 7)
+
+    weeks = max(1, config.days // 7)
+    chosen_week = secrets.randbelow(weeks) if week < 0 else max(0, min(week, weeks - 1))
+    start = world.start + timedelta(days=chosen_week * 7)
     session = Session(
         events=events,
-        contracted={str(m): rate for m, rate in BENCHMARK.base_rates},
+        contracted={str(m): rate for m, rate in config.base_rates},
         start=start,
         end=start + timedelta(days=6),
-        source=f"generated merchant, week {week}",
+        source=f"generated merchant #{chosen_seed}, week {chosen_week + 1}",
     )
     _reap()
     token = uuid.uuid4().hex
@@ -281,11 +288,13 @@ class AskOut(BaseModel):
 
 @router.post("/ask", response_model=AskOut)
 def ask_question(body: AskIn) -> AskOut:
+    from residual.agents.chat import Chat
     from residual.explain import qa
 
     session = _session(body.token)
+    chat = Chat()
     try:
-        answer = qa.ask(session.warehouse, body.question)
+        answer = qa.ask(session.warehouse, body.question, speaker=chat if chat.ready else None)
     except qa.UnsafeQuestion as exc:
         raise HTTPException(422, f"refused: {exc}") from exc
 

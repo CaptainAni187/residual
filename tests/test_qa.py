@@ -143,3 +143,70 @@ def test_pragma_is_refused_even_though_duckdb_calls_it_a_select(leak: str) -> No
     assert duckdb.extract_statements(leak)[0].type == duckdb.StatementType.SELECT
     with pytest.raises(UnsafeQuestion, match="starts with SELECT"):
         validate(leak)
+
+
+class _Speaker:
+    def __init__(self, reply: str, ready: bool = True) -> None:
+        self._reply, self._ready = reply, ready
+        self.asked: list[str] = []
+
+    @property
+    def ready(self) -> bool:
+        return self._ready
+
+    def describe(self) -> str:
+        return "stub-provider"
+
+    def say(self, system: str, prompt: str, max_tokens: int = 400) -> str:
+        self.asked.append(prompt)
+        if self._reply == "boom":
+            raise RuntimeError("provider unreachable")
+        return self._reply
+
+
+def test_a_question_outside_the_catalogue_reaches_the_model(wh):
+    speaker = _Speaker("SELECT method, count(*) AS n FROM events GROUP BY method")
+    answer = ask(wh, "break the payments down however you like", speaker=speaker)
+    assert answer.ok
+    assert answer.source == "stub-provider"
+    assert answer.rows
+    assert speaker.asked
+
+
+def test_the_model_leads_when_one_is_configured(wh):
+    speaker = _Speaker("SELECT method, count(*) AS n FROM events GROUP BY method")
+    answer = ask(wh, "which settlements never arrived?", speaker=speaker)
+    assert answer.source == "stub-provider"
+    assert speaker.asked
+
+
+def test_the_catalogue_catches_the_model_when_it_writes_nonsense(wh):
+    speaker = _Speaker("SELECT * FROM table_that_is_not_there")
+    answer = ask(wh, "which settlements never arrived?", speaker=speaker)
+    assert answer.source.startswith("catalogue")
+    assert answer.ok
+
+
+def test_hostile_sql_from_the_model_is_refused(wh):
+    answer = ask(wh, "wipe it", speaker=_Speaker("DROP TABLE postings"))
+    assert not answer.ok
+    assert "not a SELECT" in answer.refused
+
+
+def test_an_empty_model_reply_is_refused(wh):
+    answer = ask(wh, "something", speaker=_Speaker(""))
+    assert not answer.ok
+    assert "returned nothing" in answer.refused
+
+
+def test_a_provider_failure_is_reported_not_raised(wh):
+    answer = ask(wh, "something", speaker=_Speaker("boom"))
+    assert not answer.ok
+    assert "could not be reached" in answer.refused
+
+
+def test_a_speaker_that_is_not_ready_is_not_used(wh):
+    speaker = _Speaker("SELECT 1", ready=False)
+    answer = ask(wh, "something off catalogue entirely", speaker=speaker)
+    assert not answer.ok
+    assert not speaker.asked

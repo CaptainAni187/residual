@@ -144,3 +144,22 @@ def test_uploads_are_capped_and_expire(client, recon_blob):
             "/api/close", files={"recon": ("r.json", recon_blob, "application/json")}
         )
     assert len(api._SESSIONS) <= api.MAX_SESSIONS
+
+
+def test_the_generated_merchant_differs_between_runs(client):
+    sources = {client.post("/api/demo").json()["source"] for _ in range(3)}
+    assert len(sources) > 1
+
+
+def test_every_generated_merchant_still_closes_to_zero(client):
+    for _ in range(3):
+        body = client.post("/api/demo").json()
+        assert body["residual_paise"] == 0, body["source"]
+        assert body["covered"] is True
+
+
+def test_a_pinned_seed_reproduces_the_same_merchant(client):
+    first = client.post("/api/demo?seed=4242&week=3").json()
+    again = client.post("/api/demo?seed=4242&week=3").json()
+    assert first["source"] == again["source"]
+    assert first["gap_paise"] == again["gap_paise"]
