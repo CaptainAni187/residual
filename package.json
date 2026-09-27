@@ -10,9 +10,9 @@
     "api": "uv run uvicorn residual.web.app:app --reload --port 8000"
   },
   "dependencies": {
-    "next": "15.5.4",
-    "react": "19.1.1",
-    "react-dom": "19.1.1"
+    "next": "16.3.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.13",
