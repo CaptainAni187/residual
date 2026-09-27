@@ -92,6 +92,48 @@ export async function demoClose(week = 8): Promise<CloseResult> {
   return unwrap<CloseResult>(await fetch(`/api/demo?week=${week}`, { method: "POST" }));
 }
 
+export type StatementRow = {
+  date: string;
+  narration: string;
+  ref: string;
+  debit_paise: number;
+  credit_paise: number;
+  balance_paise: number | null;
+};
+
+export type StatementOut = {
+  rows: StatementRow[];
+  strategy: string;
+  ties_to_balance: boolean;
+  balances_checked: number;
+  rows_disagreeing: number;
+  skipped: string[];
+  credits_paise: number;
+  debits_paise: number;
+};
+
+export type GstOut = {
+  source: string;
+  paid_paise: number;
+  claimable_paise: number;
+  at_risk_paise: number;
+  invoices: number;
+  risks: { kind: string; title: string; amount: string; amount_paise: number; detail: string; action: string }[];
+};
+
+export async function readStatement(file: File): Promise<StatementOut> {
+  const form = new FormData();
+  form.append("statement", file);
+  return unwrap<StatementOut>(await fetch("/api/statement", { method: "POST", body: form }));
+}
+
+export async function checkGst(recon: File, gstr2b: File): Promise<GstOut> {
+  const form = new FormData();
+  form.append("recon", recon);
+  form.append("gstr2b", gstr2b);
+  return unwrap<GstOut>(await fetch("/api/gst", { method: "POST", body: form }));
+}
+
 export const explainCause = (token: string, cause: string) =>
   post<Explanation>("/api/explain", { token, cause });
 

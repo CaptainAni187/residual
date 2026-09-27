@@ -163,3 +163,48 @@ def test_a_pinned_seed_reproduces_the_same_merchant(client):
     again = client.post("/api/demo?seed=4242&week=3").json()
     assert first["source"] == again["source"]
     assert first["gap_paise"] == again["gap_paise"]
+
+
+def test_a_bank_statement_is_read_and_ties_to_its_own_balance(client):
+    blob = (FIXTURES / "statements" / "hdfc.csv").read_bytes()
+    body = client.post(
+        "/api/statement", files={"statement": ("hdfc.csv", blob, "text/csv")}
+    ).json()
+    assert body["rows"]
+    assert body["ties_to_balance"] is True
+    assert body["balances_checked"] > 0
+    assert body["rows_disagreeing"] == 0
+    assert body["credits_paise"] > 0
+
+
+def test_a_statement_with_no_transactions_is_refused(client):
+    reply = client.post(
+        "/api/statement", files={"statement": ("empty.csv", b"Date,Narration\n", "text/csv")}
+    )
+    assert reply.status_code == 422
+
+
+def test_gst_credit_reports_what_cannot_be_claimed(client):
+    body = client.post(
+        "/api/gst",
+        files={
+            "recon": ("r.json", (FIXTURES / "recon_march.json").read_bytes(), "application/json"),
+            "gstr2b": ("g.json", (FIXTURES / "gst" / "gstr2b_march.json").read_bytes(), "application/json"),
+        },
+    ).json()
+    assert body["paid_paise"] > 0
+    assert body["invoices"] > 0
+    assert body["at_risk_paise"] >= 0
+    for risk in body["risks"]:
+        assert risk["action"]
+
+
+def test_an_unreadable_gst_return_is_refused(client):
+    reply = client.post(
+        "/api/gst",
+        files={
+            "recon": ("r.json", (FIXTURES / "recon_march.json").read_bytes(), "application/json"),
+            "gstr2b": ("g.json", b"{}", "application/json"),
+        },
+    )
+    assert reply.status_code == 422

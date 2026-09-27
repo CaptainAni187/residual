@@ -376,3 +376,129 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
         verdict=verdict.reason(),
         accepted=verdict.accepted,
     )
+
+
+class StatementRow(BaseModel):
+    date: str
+    narration: str
+    ref: str
+    debit_paise: int
+    credit_paise: int
+    balance_paise: int | None
+
+
+class StatementOut(BaseModel):
+    rows: list[StatementRow]
+    strategy: str
+    ties_to_balance: bool
+    balances_checked: int
+    rows_disagreeing: int
+    skipped: list[str]
+    credits_paise: int
+    debits_paise: int
+
+
+@router.post("/statement", response_model=StatementOut)
+async def read_statement(
+    statement: Annotated[UploadFile, File(description="Bank statement, CSV")],
+) -> StatementOut:
+    blob = await _read(statement)
+    try:
+        parsed = bank.parse(blob.decode("utf-8-sig", errors="replace"))
+    except bank.UnreadableStatement as exc:
+        raise HTTPException(422, f"could not read {statement.filename}: {exc}") from exc
+    if not parsed.rows:
+        raise HTTPException(422, f"no transaction rows were found in {statement.filename}")
+
+    return StatementOut(
+        rows=[
+            StatementRow(
+                date=row.txn_date.isoformat(),
+                narration=row.narration,
+                ref=row.ref,
+                debit_paise=row.debit.paise,
+                credit_paise=row.credit.paise,
+                balance_paise=row.balance.paise if row.balance else None,
+            )
+            for row in parsed.rows
+        ],
+        strategy=parsed.strategy,
+        ties_to_balance=parsed.reconciles,
+        balances_checked=parsed.balance_checked,
+        rows_disagreeing=len(parsed.balance_broken),
+        skipped=[f"line {line}: {why}" for line, why in parsed.skipped[:20]],
+        credits_paise=sum(r.credit.paise for r in parsed.rows),
+        debits_paise=sum(r.debit.paise for r in parsed.rows),
+    )
+
+
+class GstRisk(BaseModel):
+    kind: str
+    title: str
+    amount: str
+    amount_paise: int
+    detail: str
+    action: str
+
+
+class GstOut(BaseModel):
+    source: str
+    paid_paise: int
+    claimable_paise: int
+    at_risk_paise: int
+    invoices: int
+    risks: list[GstRisk]
+
+
+@router.post("/gst", response_model=GstOut)
+async def gst_credit(
+    recon: Annotated[UploadFile, File(description="Razorpay recon or payments export")],
+    gstr2b: Annotated[UploadFile, File(description="GSTR-2B, JSON or CSV")],
+) -> GstOut:
+    from residual.explain import tax
+    from residual.ingest import gst
+    from residual.ledger import select
+    from residual.ledger.money import total
+
+    events = _events_from(await _read(recon), recon.filename or "the recon file")
+    name = gstr2b.filename or "the GSTR-2B file"
+    text = (await _read(gstr2b)).decode("utf-8-sig", errors="replace")
+    try:
+        book = gst.parse_csv(text) if name.lower().endswith(".csv") else gst.parse_json(text)
+    except gst.UnreadableReturn as exc:
+        raise HTTPException(422, f"could not read {name}: {exc}") from exc
+
+    if not book.invoices:
+        raise HTTPException(
+            422,
+            f"{name} has no invoices in it. Upload the GSTR-2B for the same period as the "
+            f"payment report, otherwise every rupee of GST would look unclaimable.",
+        )
+
+    days = sorted(e.occurred_at for e in events)
+    captures = [e for e in select.captures(events) if days[0] <= e.occurred_at <= days[-1]]
+    paid = total(e.tax for e in captures)
+    available = book.credit_from(tax.RAZORPAY_GSTIN)
+
+    found = [
+        r
+        for r in (
+            tax.gst_input_credit(events, book, days[0], days[-1]),
+            tax.unmatched_suppliers(book),
+        )
+        if r is not None and r.material
+    ]
+    return GstOut(
+        source=f"{recon.filename} + {name}",
+        paid_paise=paid.paise,
+        claimable_paise=available.paise,
+        at_risk_paise=sum(r.amount.paise for r in found),
+        invoices=len(book.invoices),
+        risks=[
+            GstRisk(
+                kind=r.kind, title=r.title, amount=str(r.amount),
+                amount_paise=r.amount.paise, detail=r.detail, action=r.action,
+            )
+            for r in found
+        ],
+    )
