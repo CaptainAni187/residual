@@ -19,6 +19,27 @@ uv run residual serve       # same thing in a browser
 No API key, no account, no network. Nothing in this project calls an external
 service.
 
+## The path a file takes
+
+```mermaid
+flowchart TD
+  UP["Razorpay recon or<br/>payments export"] --> ING
+  BS["Bank statement<br/>CSV or PDF"] --> ING["ingest - parse, and refuse<br/>anything it cannot map"]
+  ING --> LED["ledger - events become postings,<br/>appended to a hash-chained log"]
+  LED --> WH["DuckDB warehouse"]
+  WH --> CL["close - 17 verifiers, each<br/>claiming its own accounts"]
+  CL --> Q{"residual zero, and every<br/>account fully claimed?"}
+  Q -->|yes| DEC["decomposition, with the<br/>query behind every line"]
+  Q -->|no| AGT["agent investigates<br/>what is unexplained"]
+  AGT --> ADJ{"query equals the shortfall<br/>AND every account balances?"}
+  ADJ -->|yes| DEC
+  ADJ -->|no| REJ["rejected - right number on<br/>the wrong account is still wrong"]
+  DEC --> EXP["plain-English explanation"]
+  EXP --> GATE{"does every figure trace<br/>to a verifier return?"}
+  GATE -->|yes| SHOW["shown"]
+  GATE -->|no| HOLD["withheld - the written<br/>fallback is used instead"]
+```
+
 ## Example
 
 ```
@@ -44,6 +65,17 @@ Close 2026-03-02 .. 2026-03-08     17 hypotheses checked
 ```
 
 ## How it works
+
+```mermaid
+flowchart LR
+  EV["Any event"] --> PO["Postings, validated to<br/>sum to zero at construction"]
+  PO --> CASH["bank"]
+  PO --> REST["every other account"]
+  CASH --> ID["gross captured - cash landed<br/>= sum of movement on every other account"]
+  REST --> ID
+  ID --> RES["residual must be 0.00"]
+```
+
 
 Every event becomes double-entry postings that sum to zero, enforced when the
 entry is constructed. Because each entry sums to zero, so does the movement of
@@ -196,6 +228,27 @@ leaves **every** account balanced. Hitting the number on the wrong account is
 refused.
 
 ### A real transcript
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant D as Driver
+  participant T as Toolbelt
+  participant B as Books
+  D->>T: unbalanced_accounts
+  T->>B: read
+  B-->>D: fee_expense is short
+  D->>T: event_types_touching fee_expense
+  B-->>D: moved on capture, not on settlement
+  D->>T: fee_at_contracted_rate
+  B-->>D: INR 17,785.24
+  D->>T: fee_as_billed
+  B-->>D: INR 18,241.14
+  D->>T: propose - billed less contracted
+  T->>B: adjudicate against the partition
+  B-->>D: accepted, INR 455.90 on fee_expense
+```
+
 
 The longest investigation in the quarter — `fee_rate_increase`, short by ₹455.90:
 
@@ -453,6 +506,38 @@ cash floor, `ask` for the question catalogue, `build_pack` and `verify_pack` for
 a sealed close, `restate` for a close replayed as of a cutoff, `assess_tax` for
 input-credit risk. `residual.__all__` lists all 47 names.
 
+## Running it as a web app
+
+```mermaid
+flowchart LR
+  BR["Browser"] --> VER["Vercel, one project"]
+  VER --> NXT["Next.js - workspace<br/>and engine pages"]
+  VER --> FN["Python function -<br/>FastAPI and DuckDB, 8 MB"]
+  FN --> SES["in-memory session<br/>45 min TTL, nothing written to disk"]
+  FN -. only if a key is set .-> LLM["Groq / Gemini / Anthropic"]
+```
+
+The engine runs as a serverless function rather than a second service, so there
+is nothing to wake up and no cold start in front of a visitor. Uploads are held
+in memory for the session and then dropped; `/api/health` reports
+`stores_uploads: false` because that is a property of the code rather than a
+promise.
+
+```bash
+npm install
+npm run api     # FastAPI on :8000
+npm run dev     # Next.js on :3000, proxying /api to it
+```
+
+| route | does |
+|---|---|
+| `POST /api/close` | upload an export and get the close back |
+| `POST /api/demo` | the same, on a generated merchant |
+| `POST /api/explain` | one cause in plain English, through the grounding gate |
+| `POST /api/ask` | a question answered from the books |
+| `POST /api/investigate` | set the agent on whatever is unexplained |
+| `GET /api/providers` | which model providers have a key |
+
 ## Commands
 
 ```bash
@@ -481,6 +566,30 @@ uv run residual check-live             # needs test-mode keys in .env
 ```
 
 ## Layout
+
+```mermaid
+flowchart BT
+  ledger --> domain
+  recon --> ledger
+  position --> recon
+  explain --> position
+  ingest --> ledger
+  agents --> explain
+  web --> agents
+  simulate --> ledger
+  dst --> position
+  eval --> explain
+  classDef core fill:#eef2ff,stroke:#3538cd,color:#16181d
+  classDef harness fill:#f4f4f2,stroke:#85858e,color:#44444a
+  class domain,ledger,recon,position,explain,ingest,agents core
+  class simulate,dst,eval harness
+```
+
+Arrows point at what a package may import. Product code never imports the
+simulator, and the graph is asserted acyclic by a test rather than by
+convention - it caught an `agents -> explain -> agents` cycle the day the agent
+layer landed.
+
 
 ```
 domain/     vocabulary shared by everything — causes, banking calendar
