@@ -1,0 +1,28 @@
+# Secrets. Never upload these, whatever the deploy path.
+.env
+.env.*
+*.pem
+*.key
+
+# Local caches and generated junk
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Not needed to serve the app
+tests/
+scripts/
+site/
+reports/
+data/
+dist/
+.venv/
+.claude/
+.github/

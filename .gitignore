@@ -46,3 +46,7 @@ next-env.d.ts
 .idea/
 .vscode/
 *.swp
+# Vercel
+.vercel
+.env*
+!.env.example
