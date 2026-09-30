@@ -62,6 +62,25 @@ class UnreadableStatement(Exception):
     pass
 
 
+class PasswordRequired(UnreadableStatement):
+
+    def __init__(self, wrong: bool) -> None:
+        self.wrong = wrong
+        super().__init__(
+            "that password did not open the statement"
+            if wrong
+            else "this statement is password protected"
+        )
+
+
+class NeedsOcr(UnreadableStatement):
+    pass
+
+
+def is_encrypted(blob: bytes) -> bool:
+    return b"/Encrypt" in blob
+
+
 def _norm(cell: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (cell or "").lower())
 
@@ -363,17 +382,32 @@ def load(path: str | Path) -> Statement:
 
 
 def parse_pdf(path: str | Path, password: str | None = None) -> Statement:
-    import pdfplumber
-
     size = Path(path).stat().st_size
     if size > MAX_BYTES:
         raise UnreadableStatement(
             f"{path} is {size / 1e6:,.0f} MB, past the {MAX_BYTES / 1e6:,.0f} MB ceiling"
         )
+    return parse_pdf_bytes(Path(path).read_bytes(), password=password, label=str(path))
 
+
+def parse_pdf_bytes(
+    blob: bytes, password: str | None = None, label: str = "the statement"
+) -> Statement:
+    import io
+
+    import pdfplumber
+
+    if len(blob) > MAX_BYTES:
+        raise UnreadableStatement(
+            f"{label} is {len(blob) / 1e6:,.0f} MB, past the {MAX_BYTES / 1e6:,.0f} MB ceiling"
+        )
+    if not blob.lstrip().startswith(b"%PDF"):
+        raise UnreadableStatement(f"{label} is not a PDF")
+
+    encrypted = is_encrypted(blob)
     candidates: list[tuple[str, list[list[str]]]] = []
     try:
-        with pdfplumber.open(str(path), password=password or "") as pdf:
+        with pdfplumber.open(io.BytesIO(blob), password=password or "") as pdf:
             for name, extract in _STRATEGIES:
                 rows: list[list[str]] = []
                 for page in pdf.pages:
@@ -383,15 +417,14 @@ def parse_pdf(path: str | Path, password: str | None = None) -> Statement:
     except UnreadableStatement:
         raise
     except Exception as exc:
-        raise UnreadableStatement(
-            f"could not open {path} as a PDF: {exc}. If it is encrypted, pass the "
-            f"password; if it is a scan, it needs OCR, which this does not attempt"
-        ) from exc
+        if encrypted:
+            raise PasswordRequired(wrong=bool(password)) from exc
+        raise UnreadableStatement(f"could not open {label} as a PDF") from exc
 
     if not candidates:
-        raise UnreadableStatement(
-            f"no text could be extracted from {path}; if it is a scan rather than "
-            f"a generated PDF it needs OCR, which this does not attempt"
+        raise NeedsOcr(
+            f"no text could be read from {label}. It looks like a scanned image rather "
+            f"than a statement downloaded from net banking"
         )
 
     best: Statement | None = None
@@ -408,8 +441,8 @@ def parse_pdf(path: str | Path, password: str | None = None) -> Statement:
 
     if best is None:
         raise UnreadableStatement(
-            f"{len(candidates)} extraction strategies ran on {path} and none "
-            f"produced anything with a header and a date column"
+            f"{len(candidates)} ways of reading {label} were tried and none found a table "
+            f"with a date column and amounts"
         )
     return best
 

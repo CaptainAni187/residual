@@ -16,9 +16,30 @@ from residual.simulate.world import simulate
 
 app = FastAPI(title="Residual")
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
 from residual.web.api import router as _api
 
 app.include_router(_api)
+
+
+@app.exception_handler(Exception)
+async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
+    import logging
+
+    logging.getLogger("residual").exception("unhandled error on %s", request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "server_error",
+                "message": "Something went wrong on our side while working that out.",
+                "fix": "Try again. Nothing you uploaded was kept, so you will need to add it again.",
+                "field": "",
+            }
+        },
+    )
 
 _STATE: dict[str, Any] = {}
 

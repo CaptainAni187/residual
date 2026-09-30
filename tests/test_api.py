@@ -61,10 +61,16 @@ def test_every_finding_carries_the_query_behind_it(client, token):
         assert finding["sql"].lower().startswith("select")
 
 
+def _err(reply):
+    return reply.json()["detail"]
+
+
 def test_a_file_that_is_not_json_is_refused(client):
     reply = client.post("/api/close", files={"recon": ("x.json", b"nope", "application/json")})
     assert reply.status_code == 400
-    assert "not JSON" in reply.json()["detail"]
+    assert _err(reply)["code"] == "not_json"
+    assert _err(reply)["field"] == "recon"
+    assert _err(reply)["fix"]
 
 
 def test_an_empty_upload_is_refused(client):
@@ -79,7 +85,12 @@ def test_an_oversized_upload_is_refused(client):
 
 
 def test_a_statement_that_does_not_tie_to_its_balance_is_refused(client, recon_blob):
-    broken = b"Date,Narration,Withdrawal,Deposit,Balance\n01/03/2026,x,0.00,100.00,999999.00\n"
+    broken = (
+        b"Date,Narration,Withdrawal,Deposit,Balance\n"
+        b"01/03/2026,opening,0.00,100.00,1000.00\n"
+        b"02/03/2026,credit,0.00,100.00,5555.00\n"
+        b"03/03/2026,credit,0.00,100.00,5655.00\n"
+    )
     reply = client.post(
         "/api/close",
         files={
@@ -88,13 +99,14 @@ def test_a_statement_that_does_not_tie_to_its_balance_is_refused(client, recon_b
         },
     )
     assert reply.status_code == 422
-    assert "running balance" in reply.json()["detail"]
+    assert _err(reply)["code"] == "balance_mismatch"
+    assert _err(reply)["field"] == "statement"
 
 
 def test_an_unknown_token_is_not_found(client):
     reply = client.post("/api/explain", json={"token": "0" * 32, "cause": "normal_fee"})
     assert reply.status_code == 404
-    assert "expired" in reply.json()["detail"]
+    assert _err(reply)["code"] == "session_expired"
 
 
 def test_explaining_a_cause_that_is_not_there_is_not_found(client, token):
@@ -128,10 +140,13 @@ def test_an_empty_question_is_rejected_before_it_runs(client, token):
     assert client.post("/api/ask", json={"token": token, "question": "x"}).status_code == 422
 
 
-def test_investigating_books_that_already_close_is_a_conflict(client, token):
-    reply = client.post("/api/investigate", json={"token": token})
-    assert reply.status_code == 409
-    assert "nothing open" in reply.json()["detail"]
+def test_on_balanced_books_the_agent_gives_a_second_opinion(client):
+    token = client.post("/api/demo?seed=4242&week=8").json()["token"]
+    body = client.post("/api/investigate", json={"token": token}).json()
+    assert body["mode"] == "second_opinion"
+    assert body["cause"]
+    assert body["steps"]
+    assert body["accepted"] is True
 
 
 def test_uploads_are_capped_and_expire(client, recon_blob):
@@ -208,3 +223,110 @@ def test_an_unreadable_gst_return_is_refused(client):
         },
     )
     assert reply.status_code == 422
+
+
+def test_rates_that_are_not_rates_are_refused_on_the_right_field(client, recon_blob):
+    for bad, needle in [("card=abc", "not a number"), ("bitcoin=2", "not a payment method"),
+                        ("card=45", "outside"), ("card", "not a rate")]:
+        reply = client.post(
+            "/api/close",
+            files={"recon": ("r.json", recon_blob, "application/json")},
+            data={"contract": bad},
+        )
+        assert reply.status_code == 422, bad
+        assert _err(reply)["code"] == "bad_rates"
+        assert _err(reply)["field"] == "contract"
+        assert needle in _err(reply)["message"], (bad, _err(reply)["message"])
+
+
+def test_a_csv_uploaded_as_the_report_gets_a_specific_hint(client):
+    reply = client.post(
+        "/api/close", files={"recon": ("report.csv", b"id,amount,fee\n1,2,3\n", "text/csv")}
+    )
+    assert _err(reply)["code"] == "not_json"
+    assert "CSV" in _err(reply)["fix"]
+
+
+def test_an_empty_file_is_refused_before_it_is_parsed(client):
+    reply = client.post("/api/close", files={"recon": ("r.json", b"", "application/json")})
+    assert reply.status_code == 400
+    assert _err(reply)["code"] == "empty_file"
+
+
+def _locked_pdf(password: str) -> bytes:
+    import io
+
+    from reportlab.lib import pdfencrypt
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    page = canvas.Canvas(buf, encrypt=pdfencrypt.StandardEncryption(password, canPrint=1))
+    page.drawString(72, 720, "statement")
+    page.save()
+    return buf.getvalue()
+
+
+def test_a_locked_statement_asks_for_its_password(client):
+    reply = client.post(
+        "/api/statement",
+        files={"statement": ("locked.pdf", _locked_pdf("s3cret"), "application/pdf")},
+    )
+    assert reply.status_code == 422
+    assert _err(reply)["code"] == "needs_password"
+    assert _err(reply)["field"] == "statement"
+
+
+def test_a_wrong_password_is_told_apart_from_a_missing_one(client):
+    reply = client.post(
+        "/api/statement",
+        files={"statement": ("locked.pdf", _locked_pdf("s3cret"), "application/pdf")},
+        data={"password": "guess"},
+    )
+    assert _err(reply)["code"] == "bad_password"
+
+
+def test_a_pdf_statement_is_read_and_checked(client):
+    blob = (FIXTURES / "statements" / "hdfc.pdf").read_bytes()
+    body = client.post("/api/statement", files={"statement": ("hdfc.pdf", blob, "application/pdf")}).json()
+    assert body["rows"]
+    assert body["ties_to_balance"] is True
+    assert body["assumptions"]
+
+
+def test_the_agent_drafts_a_payout_trace_with_the_real_utr(client):
+    token = client.post("/api/demo?seed=4242&week=8").json()["token"]
+    reply = client.post("/api/draft", json={"token": token, "kind": "escalate"})
+    assert reply.status_code == 200
+    body = reply.json()
+    assert body["subject"] and body["body"] and body["to"]
+    assert body["items"] >= 1
+    assert body["source"] == "template"
+
+
+def test_asking_for_a_draft_there_is_nothing_for_says_so(client):
+    token = client.post("/api/demo?seed=4242&week=0").json()["token"]
+    reply = client.post("/api/draft", json={"token": token, "kind": "payout_trace"})
+    assert reply.status_code in (200, 409)
+    if reply.status_code == 409:
+        assert _err(reply)["code"] == "nothing_to_draft"
+
+
+def test_an_unknown_draft_kind_is_refused(client, token):
+    reply = client.post("/api/draft", json={"token": token, "kind": "love_letter"})
+    assert reply.status_code == 422
+    assert _err(reply)["code"] == "unknown_draft"
+
+
+def test_a_backend_failure_is_a_message_not_a_traceback(client, monkeypatch):
+    from residual.web import api
+
+    def explode(*a, **k):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(api.Session, "close", explode)
+    local = TestClient(app, raise_server_exceptions=False)
+    reply = local.post("/api/demo?seed=4242&week=8")
+    assert reply.status_code == 500
+    assert _err(reply)["code"] == "server_error"
+    assert "disk on fire" not in reply.text
+    assert "Traceback" not in reply.text
