@@ -1,133 +1,159 @@
 "use client";
 
-import { useState } from "react";
-import { Dropzone } from "@/components/Dropzone";
-import { HowLine } from "@/components/HowLine";
+import { useEffect, useRef, useState } from "react";
+import { FileSlot, type SlotProblem } from "@/components/FileSlot";
+import { Stages } from "@/components/Stages";
 import { ToolShell } from "@/components/ToolShell";
 import { ApiError, type Answer, type CloseResult, askQuestion, closeUpload, demoClose } from "@/lib/api";
+import { useFiles } from "@/lib/files";
+import { bySlug } from "@/lib/tools";
 
-const EXAMPLES = [
-  "which settlements never arrived?",
-  "how much did I pay in fees by method?",
-  "what were my biggest payouts?",
-  "how many payments failed last week?",
+const STARTERS = [
+  "Which payouts never reached my bank?",
+  "How much did I pay in fees, by method?",
+  "What were my five biggest payouts?",
+  "How many payments failed, and by which method?",
+  "How much did I refund this period?",
 ];
 
-export default function AskTool() {
-  const [recon, setRecon] = useState<File | null>(null);
-  const [loaded, setLoaded] = useState<CloseResult | null>(null);
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<Answer | null>(null);
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
+type Turn = { q: string; a?: Answer; err?: string };
 
-  const load = async (work: () => Promise<CloseResult>, label: string) => {
-    setBusy(label);
-    setError("");
-    setAnswer(null);
+export default function AskTool() {
+  const tool = bySlug("ask")!;
+  const { files, put } = useFiles();
+  const [loaded, setLoaded] = useState<CloseResult | null>(null);
+  const [phase, setPhase] = useState<"input" | "running">("input");
+  const [failed, setFailed] = useState(false);
+  const [problem, setProblem] = useState<SlotProblem>(null);
+  const [general, setGeneral] = useState("");
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [draft, setDraft] = useState("");
+  const [thinking, setThinking] = useState(false);
+  const end = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    end.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [turns, thinking]);
+
+  const load = async (work: () => Promise<CloseResult>) => {
+    setPhase("running");
+    setFailed(false);
+    setProblem(null);
+    setGeneral("");
     try {
       setLoaded(await work());
-    } catch (problem) {
-      setError(problem instanceof ApiError ? problem.message : "could not read that file");
+      setTurns([]);
+    } catch (err) {
+      setFailed(true);
+      const e = err instanceof ApiError ? err : new ApiError("Something went wrong.", "error", "Try again.");
+      if (e.field === "recon") setProblem({ message: e.message, fix: e.fix });
+      else setGeneral([e.message, e.fix].filter(Boolean).join(" "));
     } finally {
-      setBusy("");
+      setTimeout(() => setPhase("input"), failed ? 700 : 0);
     }
   };
 
   const ask = async (text: string) => {
-    if (!loaded || text.trim().length < 2) return;
-    setQuestion(text);
-    setBusy("ask");
-    setError("");
+    const q = text.trim();
+    if (!loaded || q.length < 2 || thinking) return;
+    setDraft("");
+    setTurns((t) => [...t, { q }]);
+    setThinking(true);
     try {
-      setAnswer(await askQuestion(loaded.token, text.trim()));
-    } catch (problem) {
-      setError(problem instanceof ApiError ? problem.message : "could not answer that");
+      const a = await askQuestion(loaded.token, q);
+      setTurns((t) => t.map((turn, i) => (i === t.length - 1 ? { ...turn, a } : turn)));
+    } catch (err) {
+      const e = err instanceof ApiError ? err : null;
+      const msg = e?.code === "session_expired" ? "Your data has expired. Load it again to keep asking." : e ? [e.message, e.fix].filter(Boolean).join(" ") : "Could not answer that.";
+      setTurns((t) => t.map((turn, i) => (i === t.length - 1 ? { ...turn, err: msg } : turn)));
+      if (e?.code === "session_expired") setLoaded(null);
     } finally {
-      setBusy("");
+      setThinking(false);
     }
   };
 
   return (
     <ToolShell slug="ask">
       {!loaded ? (
-        <div className="stack">
-          <Dropzone label="Drop your Razorpay report here" accept=".json,application/json" picked={recon} onPick={setRecon} />
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button
-              className="btn"
-              disabled={!!busy}
-              onClick={() => {
-                if (!recon) {
-                  setError("choose your Razorpay report first");
-                  return;
-                }
-                load(() => closeUpload(recon, null, ""), "run");
-              }}
-            >
-              {busy === "run" ? "Loading…" : "Load it"}
-            </button>
-            <button className="btn btn-ghost" disabled={!!busy} onClick={() => load(() => demoClose(), "demo")}>
-              {busy === "demo" ? "Loading…" : "Try it with sample data"}
-            </button>
-          </div>
-          {error && <p className="err">{error}</p>}
+        <div className="panel inputs rise">
+          <FileSlot
+            slot={tool.slots[0]}
+            file={files.recon ?? null}
+            onChange={(f) => { put("recon", f); setProblem(null); }}
+            problem={problem}
+          />
+          {phase === "running" ? (
+            <Stages steps={["Reading your file", "Building your books", "Getting ready for questions"]} done={false} failed={failed} />
+          ) : (
+            <div className="cta-row">
+              <button
+                className="btn btn-lg"
+                onClick={() => (files.recon ? load(() => closeUpload(files.recon!, null, "")) : setProblem({ message: "Add your Razorpay report to continue." }))}
+              >
+                Load my data
+              </button>
+              <button className="btn btn-ghost" onClick={() => load(demoClose)}>Try with sample data</button>
+            </div>
+          )}
+          {general && <div className="banner" role="alert"><b>{general}</b></div>}
         </div>
       ) : (
-        <div className="stack">
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div className="chat rise">
+          <div className="chat-bar">
+            <span className="sub">Asking about <b>{loaded.inputs.files.join(" + ")}</b> · all data from {loaded.inputs.covers}</span>
+            <button className="btn btn-sm btn-ghost" onClick={() => setLoaded(null)}>Change data</button>
+          </div>
+
+          <div className="chat-log">
+            {turns.length === 0 && (
+              <div className="starters">
+                <p className="sub">Try one of these, or ask your own.</p>
+                <div className="starter-grid">
+                  {STARTERS.map((s) => <button key={s} className="starter" onClick={() => ask(s)}>{s}</button>)}
+                </div>
+              </div>
+            )}
+            {turns.map((turn, i) => (
+              <div key={i} className="turn">
+                <div className="bubble me">{turn.q}</div>
+                {turn.err && <div className="bubble them err-bubble">{turn.err}</div>}
+                {turn.a && (
+                  <div className="bubble them">
+                    {turn.a.rows.length > 0 ? (
+                      <div className="wide">
+                        <table className="data compact">
+                          <thead><tr>{turn.a.columns.map((c) => <th key={c}>{c.replace(/_/g, " ")}</th>)}</tr></thead>
+                          <tbody>{turn.a.rows.map((row, r) => <tr key={r}>{row.map((cell, c) => <td key={c} className="r">{cell}</td>)}</tr>)}</tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="said" style={{ margin: 0 }}>{turn.a.note || "Nothing in your data matched that."}</p>
+                    )}
+                    {turn.a.sql && (
+                      <details className="sql-wrap">
+                        <summary>Show the query · {turn.a.source.startsWith("catalogue") ? "standard question" : `written by ${turn.a.source}`}</summary>
+                        <pre className="sql">{turn.a.sql}</pre>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+            {thinking && <div className="bubble them"><div className="t-typing"><i /><i /><i /></div></div>}
+            <div ref={end} />
+          </div>
+
+          <form className="composer" onSubmit={(e) => { e.preventDefault(); ask(draft); }}>
             <input
               className="field"
-              style={{ flex: 1, minWidth: 240 }}
-              placeholder="Ask anything about your payments"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && ask(question)}
+              placeholder="Ask anything about your payments…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              maxLength={400}
+              aria-label="Your question"
             />
-            <button className="btn" onClick={() => ask(question)} disabled={!!busy}>
-              {busy === "ask" ? "Thinking…" : "Ask"}
-            </button>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {EXAMPLES.map((example) => (
-              <button key={example} className="btn btn-ghost" style={{ fontSize: 12.5, padding: "6px 12px" }} onClick={() => ask(example)}>
-                {example}
-              </button>
-            ))}
-          </div>
-
-          {error && <p className="err">{error}</p>}
-
-          {answer && (
-            <>
-              {answer.rows.length > 0 ? (
-                <div className="panel wide">
-                  <table className="data">
-                    <thead>
-                      <tr>{answer.columns.map((c) => <th key={c}>{c.replace(/_/g, " ")}</th>)}</tr>
-                    </thead>
-                    <tbody>
-                      {answer.rows.map((row, i) => (
-                        <tr key={i}>{row.map((cell, j) => <td key={j} className="r">{cell}</td>)}</tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="panel">
-                  <p className="said" style={{ margin: 0 }}>{answer.note || "Nothing matched that."}</p>
-                </div>
-              )}
-              {answer.sql && (
-                <HowLine>
-                  <pre className="sql">{answer.sql}</pre>
-                </HowLine>
-              )}
-            </>
-          )}
-
-          <p className="sub">Loaded: {loaded.source}</p>
+            <button className="btn" type="submit" disabled={thinking || draft.trim().length < 2}>Ask</button>
+          </form>
         </div>
       )}
     </ToolShell>

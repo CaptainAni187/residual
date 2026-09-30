@@ -51,6 +51,17 @@ def _flagged(close: Close, *causes: str) -> list[Finding]:
     return [f for f in close.findings if str(f.cause) in causes and f.amount.paise]
 
 
+def _where(finding: Finding) -> str:
+    ids = [i for i in finding.evidence.entity_ids[:3] if i]
+    if not ids:
+        return ""
+    if str(finding.cause) == "fee_rate_increase":
+        return f" (on {', '.join(ids)} payments)"
+    if str(finding.cause) == "settlement_never_arrived":
+        return f" (UTR {', '.join(ids)})"
+    return f" (ref {', '.join(ids)})"
+
+
 def _period(start: date, end: date) -> str:
     return f"{start:%d %b %Y} to {end:%d %b %Y}"
 
@@ -59,11 +70,7 @@ def _escalate(close: Close, start: date, end: date) -> tuple[str, str, str, int]
     items = [f for f in close.findings if f.alarming and f.amount.paise]
     if not items:
         raise NothingToDraft("nothing in this period needs escalating")
-    lines = "\n".join(
-        f"  - {f.title}: {f.amount}"
-        + (f" (ref {', '.join(f.evidence.entity_ids[:3])})" if f.evidence.entity_ids else "")
-        for f in items
-    )
+    lines = "\n".join(f"  - {f.title}: {f.amount}{_where(f)}" for f in items)
     body = (
         f"Hello,\n\n"
         f"Reconciling our settlements for {_period(start, end)}, the following do not match "

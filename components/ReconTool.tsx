@@ -1,9 +1,13 @@
 "use client";
 
-import { Fragment, useState } from "react";
-import { Dropzone } from "@/components/Dropzone";
-import { HowLine } from "@/components/HowLine";
+import Link from "next/link";
+import { Fragment, useMemo, useState } from "react";
+import { AgentPanel } from "@/components/AgentPanel";
+import { CountUp } from "@/components/CountUp";
+import { FileSlot, type SlotProblem } from "@/components/FileSlot";
+import { Info } from "@/components/Info";
 import { Assumed, Verdict, WhatWentIn } from "@/components/Report";
+import { Stages } from "@/components/Stages";
 import { ToolShell } from "@/components/ToolShell";
 import {
   ApiError,
@@ -15,11 +19,20 @@ import {
   explainCause,
   rupees,
 } from "@/lib/api";
+import { useFiles } from "@/lib/files";
+import { RATES_HELP, bySlug } from "@/lib/tools";
 
 export type Mode = "reconcile" | "missing" | "fees";
 
 const FEE_CAUSES = ["normal_fee", "fee_rate_increase", "gst_on_fee", "instant_settlement_fee", "tds_194o"];
 const MISSING_CAUSES = ["settlement_never_arrived", "settlement_in_flight"];
+
+const VERB: Record<Mode, string> = { reconcile: "Reconcile", missing: "Find missing payouts", fees: "Check my fees" };
+const FINE: Record<Mode, string> = {
+  reconcile: "Every rupee of the difference is ordinary: fees, tax, refunds and timing. The books balance with nothing left over.",
+  missing: "Every payout the gateway sent in this period reached your bank, or is still inside its normal settlement window.",
+  fees: "Every fee in this period was charged at your contracted rate.",
+};
 
 function slice(mode: Mode, result: CloseResult): Finding[] {
   if (mode === "fees") return result.findings.filter((f) => FEE_CAUSES.includes(f.cause));
@@ -27,188 +40,278 @@ function slice(mode: Mode, result: CloseResult): Finding[] {
   return result.findings;
 }
 
-function verdict(mode: Mode, rows: Finding[], result: CloseResult) {
+function headline(mode: Mode, rows: Finding[], result: CloseResult) {
   if (mode === "missing") {
-    const total = rows.reduce((sum, f) => sum + f.amount_paise, 0);
-    return total > 0
-      ? { big: rupees(total), tone: "bad", line: `across ${rows.length} payout${rows.length === 1 ? "" : "s"} that have not reached your bank` }
-      : { big: "Nothing missing", tone: "good", line: "every payout in this file reached the bank" };
+    const lost = rows.find((f) => f.cause === "settlement_never_arrived");
+    return lost && lost.amount_paise > 0
+      ? { paise: lost.amount_paise, tone: "bad", line: "sent by the gateway, never credited to your bank" }
+      : { paise: 0, tone: "good", line: "missing — every payout arrived" };
   }
   if (mode === "fees") {
     const over = rows.find((f) => f.cause === "fee_rate_increase");
     const total = rows.reduce((sum, f) => sum + f.amount_paise, 0);
     return over && over.amount_paise > 0
-      ? { big: rupees(over.amount_paise), tone: "bad", line: "charged above your contracted rate" }
-      : { big: rupees(total), tone: "good", line: "charged in total, all at your contracted rate" };
+      ? { paise: over.amount_paise, tone: "bad", line: "charged above your contracted rate" }
+      : { paise: total, tone: "good", line: "charged in fees and tax, all at your contracted rate" };
   }
   return {
-    big: rupees(result.gap_paise),
+    paise: result.gap_paise,
     tone: "",
-    line: `between ${rupees(result.gross_paise)} captured and ${rupees(result.landed_paise)} banked`,
+    line: `difference between ${rupees(result.gross_paise)} captured and ${rupees(result.landed_paise)} banked`,
   };
 }
 
 export function ReconTool({ mode }: { mode: Mode }) {
-  const [recon, setRecon] = useState<File | null>(null);
-  const [statement, setStatement] = useState<File | null>(null);
-  const [rates, setRates] = useState("card=2.00,upi=2.36,netbanking=2.00");
+  const tool = bySlug(mode)!;
+  const { files, put, rates, setRates } = useFiles();
+  const [password, setPassword] = useState("");
+  const [askPassword, setAskPassword] = useState(false);
+  const [phase, setPhase] = useState<"input" | "running" | "done">("input");
+  const [failed, setFailed] = useState(false);
   const [result, setResult] = useState<CloseResult | null>(null);
+  const [problems, setProblems] = useState<Record<string, SlotProblem>>({});
+  const [general, setGeneral] = useState<ApiError | null>(null);
   const [open, setOpen] = useState<string | null>(null);
-  const [said, setSaid] = useState<Record<string, Explanation>>({});
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
+  const [said, setSaid] = useState<Record<string, Explanation | "loading" | "failed">>({});
 
-  const go = async (work: () => Promise<CloseResult>, label: string) => {
-    setBusy(label);
-    setError("");
+  const steps = useMemo(
+    () => [
+      "Reading your file",
+      "Turning it into double-entry books",
+      `Running ${mode === "fees" ? "fee" : "17"} checks`,
+      "Working out what needs attention",
+    ],
+    [mode],
+  );
+
+  const missingRequired = tool.slots.filter((s) => s.required && !files[s.id]);
+  const ratesNeeded = tool.rates === "required" && !rates.trim();
+
+  const run = async (work: () => Promise<CloseResult>) => {
+    setPhase("running");
+    setFailed(false);
+    setGeneral(null);
+    setProblems({});
     setOpen(null);
     setSaid({});
     try {
-      setResult(await work());
+      const out = await work();
+      setResult(out);
+      setPhase("done");
+      setAskPassword(false);
     } catch (problem) {
-      setError(problem instanceof ApiError ? problem.message : "could not read that file");
-    } finally {
-      setBusy("");
+      setFailed(true);
+      const err = problem instanceof ApiError ? problem : new ApiError("Something went wrong.", "error", "Try again.");
+      if (err.code === "needs_password" || err.code === "bad_password") setAskPassword(true);
+      if (err.field) setProblems({ [err.field]: { message: err.message, fix: err.fix } });
+      else setGeneral(err);
+      setTimeout(() => setPhase("input"), 700);
     }
+  };
+
+  const submit = () => {
+    if (missingRequired.length) {
+      setProblems(Object.fromEntries(missingRequired.map((s) => [s.id, { message: `Add your ${s.label} to continue.` }])));
+      return;
+    }
+    if (ratesNeeded) {
+      setProblems({ contract: { message: "Your contracted rates are needed to check fees." } });
+      return;
+    }
+    run(() => closeUpload(files.recon!, tool.slots.some((s) => s.id === "statement") ? files.statement ?? null : null, rates, password));
   };
 
   const pick = async (finding: Finding) => {
     const next = open === finding.cause ? null : finding.cause;
     setOpen(next);
     if (!next || said[finding.cause] || !result) return;
+    setSaid((s) => ({ ...s, [finding.cause]: "loading" }));
     try {
       const told = await explainCause(result.token, finding.cause);
-      setSaid((prior) => ({ ...prior, [finding.cause]: told }));
+      setSaid((s) => ({ ...s, [finding.cause]: told }));
     } catch {
-      /* the basis line still shows */
+      setSaid((s) => ({ ...s, [finding.cause]: "failed" }));
     }
   };
 
   const rows = result ? slice(mode, result) : [];
   const peak = Math.max(...rows.map((f) => Math.abs(f.amount_paise)), 1);
-  const head = result ? verdict(mode, rows, result) : null;
+  const head = result ? headline(mode, rows, result) : null;
 
   return (
     <ToolShell slug={mode}>
-      <div className="stack">
-        <Dropzone
-          label="Drop your Razorpay report here"
-          accept=".json,application/json"
-          picked={recon}
-          onPick={setRecon}
-        />
-        {mode === "reconcile" && (
-          <Dropzone
-            label="Bank statement CSV (optional)"
-            accept=".csv,text/csv"
-            picked={statement}
-            onPick={setStatement}
-          />
-        )}
-        {mode !== "missing" && (
-          <div>
-            <label className="lbl" htmlFor="rates">Your contracted rates</label>
-            <input id="rates" className="field" value={rates} onChange={(e) => setRates(e.target.value)} spellCheck={false} />
+      {phase !== "done" && (
+        <div className="panel inputs rise">
+          <div className="stack">
+            {tool.slots.map((slot) => (
+              <FileSlot
+                key={slot.id}
+                slot={slot}
+                file={files[slot.id] ?? null}
+                onChange={(f) => {
+                  put(slot.id, f);
+                  setProblems((p) => ({ ...p, [slot.id]: null }));
+                  if (slot.id === "statement") {
+                    setAskPassword(false);
+                    setPassword("");
+                  }
+                }}
+                problem={problems[slot.id] ?? null}
+                askPassword={slot.id === "statement" && askPassword}
+                password={password}
+                onPassword={setPassword}
+              />
+            ))}
+
+            {tool.rates && (
+              <div className="slot" data-state={problems.contract ? "error" : "ready"}>
+                <div className="slot-head">
+                  <label className="slot-label" htmlFor="rates">Contracted rates</label>
+                  <span className={`badge ${tool.rates === "required" ? "badge-req" : "badge-opt"}`}>
+                    {tool.rates === "required" ? "Required" : "Optional"}
+                  </span>
+                  <Info label="About contracted rates">{RATES_HELP}</Info>
+                </div>
+                <input
+                  id="rates"
+                  className="field"
+                  value={rates}
+                  onChange={(e) => {
+                    setRates(e.target.value);
+                    setProblems((p) => ({ ...p, contract: null }));
+                  }}
+                  spellCheck={false}
+                  placeholder="card=2.00,upi=0,netbanking=2.00"
+                />
+                <span className="hint">method=percent, separated by commas</span>
+                {problems.contract && (
+                  <div className="slot-err" role="alert">
+                    <b>{problems.contract.message}</b>
+                    {problems.contract.fix && <span>{problems.contract.fix}</span>}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-        )}
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button
-            className="btn"
-            disabled={!!busy}
-            onClick={() => {
-              if (!recon) {
-                setError("choose your Razorpay report first");
-                return;
-              }
-              go(() => closeUpload(recon, statement, rates), "run");
-            }}
-          >
-            {busy === "run" ? "Working…" : "Run it"}
-          </button>
-          <button className="btn btn-ghost" disabled={!!busy} onClick={() => go(() => demoClose(), "demo")}>
-            {busy === "demo" ? "Loading…" : "Try it with sample data"}
-          </button>
+
+          {phase === "running" ? (
+            <Stages steps={steps} done={false} failed={failed} />
+          ) : (
+            <div className="cta-row">
+              <button className="btn btn-lg" onClick={submit}>{VERB[mode]}</button>
+              <button className="btn btn-ghost" onClick={() => run(demoClose)}>Try with sample data</button>
+              {missingRequired.length > 0 && (
+                <span className="hint">Needs: {missingRequired.map((s) => s.label).join(", ")}</span>
+              )}
+            </div>
+          )}
+
+          {general && (
+            <div className="banner" role="alert">
+              <b>{general.message}</b>
+              {general.fix && <span>{general.fix}</span>}
+              <button className="btn btn-sm btn-ghost" onClick={submit}>Try again</button>
+            </div>
+          )}
         </div>
-        {error && <p className="err">{error}</p>}
-      </div>
+      )}
 
-      {result && head && (
-        <div className="stack" style={{ marginTop: 26 }}>
-          <WhatWentIn result={result} />
-
-          <div className="panel">
-            <div className={`headline ${head.tone}`}>{head.big}</div>
-            <div className="sub" style={{ marginTop: 4 }}>{head.line}</div>
+      {phase === "done" && result && head && (
+        <div className="stack result">
+          <div className="result-bar rise">
+            <span className="sub">Result for {result.inputs.files.join(" + ")}</span>
+            <button className="btn btn-sm btn-ghost" onClick={() => { setPhase("input"); setResult(null); }}>
+              Start over
+            </button>
           </div>
 
-          {rows.length > 0 && (
-            <div className="panel wide">
+          <WhatWentIn inputs={result.inputs} />
+
+          <div className="panel hero-result rise">
+            <CountUp paise={head.paise} className={`headline ${head.tone}`} />
+            <div className="sub">{head.line}</div>
+          </div>
+
+          <Verdict flagged={rows.filter((f) => f.alarming)} total={rows.length} fine={FINE[mode]} />
+
+          {rows.length > 0 ? (
+            <div className="panel wide rise">
+              <div className="table-cap">
+                <b>Where it went</b>
+                <span className="sub">Click any line for a plain-English explanation and the query behind it.</span>
+              </div>
               <table className="data">
                 <thead>
-                  <tr>
-                    <th>What</th>
-                    <th style={{ width: 110 }} />
-                    <th className="r">Amount</th>
-                  </tr>
+                  <tr><th>What</th><th style={{ width: 120 }} /><th className="r">Amount</th></tr>
                 </thead>
                 <tbody>
-                  {rows.map((finding) => (
-                    <Fragment key={finding.cause}>
-                      <tr className="click" onClick={() => pick(finding)}>
-                        <td>
-                          {finding.title}
-                          {finding.alarming && <span className="flag flag-red" style={{ marginLeft: 8 }}>check this</span>}
-                          <div className="why">{finding.note}</div>
-                        </td>
-                        <td>
-                          <span className="gauge" aria-hidden="true">
-                            <s />
-                            {finding.amount_paise < 0 ? (
-                              <i className="dn" style={{ right: "50%", width: `${(Math.abs(finding.amount_paise) / peak) * 49}%` }} />
-                            ) : (
-                              <i style={{ left: "50%", width: `${(Math.abs(finding.amount_paise) / peak) * 49}%` }} />
-                            )}
-                          </span>
-                        </td>
-                        <td className="r">{rupees(finding.amount_paise)}</td>
-                      </tr>
-                      {open === finding.cause && (
-                        <tr>
-                          <td colSpan={3} style={{ background: "var(--sunken)" }}>
-                            <p className="said" style={{ margin: "2px 0 10px" }}>
-                              {said[finding.cause]?.text ?? "Reading the ledger…"}
-                            </p>
-                            <pre className="sql">{finding.sql}</pre>
+                  {rows.map((finding, i) => {
+                    const told = said[finding.cause];
+                    const width = `${(Math.abs(finding.amount_paise) / peak) * 49}%`;
+                    return (
+                      <Fragment key={finding.cause}>
+                        <tr className="click row-in" style={{ animationDelay: `${i * 45}ms` }} onClick={() => pick(finding)} aria-expanded={open === finding.cause}>
+                          <td>
+                            <span className="row-title">{finding.title}</span>
+                            {finding.alarming && <span className="flag flag-red">check this</span>}
                           </td>
+                          <td>
+                            <span className="gauge" aria-hidden="true">
+                              <s />
+                              {finding.amount_paise < 0
+                                ? <i className="dn grow" style={{ right: "50%", width }} />
+                                : <i className="grow" style={{ left: "50%", width }} />}
+                            </span>
+                          </td>
+                          <td className="r">{rupees(finding.amount_paise)}</td>
                         </tr>
-                      )}
-                    </Fragment>
-                  ))}
+                        {open === finding.cause && (
+                          <tr className="expand">
+                            <td colSpan={3}>
+                              <p className="said">
+                                {told === "loading" || told === undefined
+                                  ? "Reading the ledger…"
+                                  : told === "failed"
+                                    ? finding.note
+                                    : told.text}
+                              </p>
+                              {typeof told === "object" && (
+                                <span className="said-src">
+                                  {told.source === "offline" ? "Written from the verifier's output" : `Worded by ${told.source} · every figure checked`}
+                                </span>
+                              )}
+                              {finding.refs.length > 0 && (
+                                <p className="refs">References: <span className="mono">{finding.refs.join(", ")}</span></p>
+                              )}
+                              <details className="sql-wrap">
+                                <summary>Show the query</summary>
+                                <pre className="sql">{finding.sql}</pre>
+                              </details>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
+              {mode === "reconcile" && (
+                <div className="balance-line">
+                  <span>Everything above adds up to the difference.</span>
+                  <b className="mono">{rupees(result.residual_paise)} left unexplained</b>
+                </div>
+              )}
             </div>
+          ) : (
+            <div className="panel rise"><p className="said" style={{ margin: 0 }}>{FINE[mode]}</p></div>
           )}
 
-          {mode === "reconcile" && (
-            <div className="panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <span className="sub">Everything above adds up to the difference, with nothing left over.</span>
-              <span className="headline good" style={{ fontSize: 20 }}>{rupees(result.residual_paise)} unexplained</span>
-            </div>
-          )}
-
-          <Verdict flagged={rows.filter((f) => f.alarming)} total={rows.length} />
+          <AgentPanel token={result.token} actions={tool.agents} />
           <Assumed assumptions={result.assumptions} />
 
-          <HowLine>
-            <p className="sub" style={{ marginBottom: 10 }}>
-              Your report becomes double-entry bookkeeping, so the difference has to equal the
-              movement of every other account. Each line below is measured with its own query
-              against your data — click any row above to see the query that produced it.
-            </p>
-            <p className="sub">
-              {result.checked} checks ran over {result.start} to {result.end}. Source: {result.source}.
-            </p>
-          </HowLine>
+          {mode !== "reconcile" && (
+            <Link className="next-link" href="/reconcile">See the full breakdown in Settlement Reconciler →</Link>
+          )}
         </div>
       )}
     </ToolShell>

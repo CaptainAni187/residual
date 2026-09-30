@@ -187,7 +187,7 @@ async def _read_statement(upload: UploadFile, password: str, field_name: str = "
     except bank.PasswordRequired as exc:
         if exc.wrong:
             raise problem(422, "bad_password", "That password did not open the statement.", "Banks usually use your customer ID or date of birth. Check the email the statement came with.", field_name) from exc
-        raise problem(422, "needs_password", f"{name} is password protected.", "Enter the password below. It is used once to open the file and never kept.", field_name) from exc
+        raise problem(422, "needs_password", f"{name} is password protected.", "Enter its password to open it. The password is used once and never kept.", field_name) from exc
     except bank.NeedsOcr as exc:
         raise problem(422, "needs_ocr", f"{name} is a scanned image, not a text PDF.", "Download the statement from net banking as a PDF or CSV rather than scanning a printout.", field_name) from exc
     except bank.UnreadableStatement as exc:
@@ -215,6 +215,7 @@ class Inputs(BaseModel):
     rows_in: int
     events: int
     period: str
+    covers: str
     days: int
     checks_run: int
 
@@ -267,6 +268,10 @@ def _shape(token: str, session: Session, close: Close) -> CloseOut:
             rows_in=session.rows_in,
             events=len(session.events),
             period=f"{session.start} to {session.end}",
+            covers=(
+                f"{min(e.occurred_at for e in session.events)} to "
+                f"{max(e.occurred_at for e in session.events)}"
+            ),
             days=(session.end - session.start).days + 1,
             checks_run=close.checked,
         ),

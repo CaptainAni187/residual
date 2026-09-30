@@ -210,3 +210,25 @@ def test_a_speaker_that_is_not_ready_is_not_used(wh):
     answer = ask(wh, "something off catalogue entirely", speaker=speaker)
     assert not answer.ok
     assert not speaker.asked
+
+
+@pytest.mark.parametrize(
+    ("question", "limit"),
+    [
+        ("What were my five biggest payouts?", 5),
+        ("top 3 largest settlements", 3),
+        ("show me the 2 biggest", 2),
+        ("biggest payouts", 10),
+    ],
+)
+def test_the_catalogue_honours_how_many_were_asked_for(question, limit):
+    from residual.explain.qa import from_catalogue
+
+    _, sql = from_catalogue(question)
+    assert sql.rstrip().endswith(f"LIMIT {limit}")
+
+
+def test_asking_for_five_returns_at_most_five(wh):
+    answer = ask(wh, "What were my five biggest payouts?")
+    assert answer.ok
+    assert len(answer.rows) <= 5

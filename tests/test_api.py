@@ -330,3 +330,46 @@ def test_a_backend_failure_is_a_message_not_a_traceback(client, monkeypatch):
     assert _err(reply)["code"] == "server_error"
     assert "disk on fire" not in reply.text
     assert "Traceback" not in reply.text
+
+
+LOCKED = FIXTURES / "statements" / "hdfc_locked.pdf"
+LOCKED_PASSWORD = "HDFC1234"
+
+
+def test_the_right_password_opens_a_real_locked_statement(client):
+    body = client.post(
+        "/api/statement",
+        files={"statement": ("hdfc_locked.pdf", LOCKED.read_bytes(), "application/pdf")},
+        data={"password": LOCKED_PASSWORD},
+    ).json()
+    assert len(body["rows"]) == 6
+    assert body["ties_to_balance"] is True
+
+
+def test_a_locked_statement_can_be_reconciled_with_its_password(client, recon_blob):
+    reply = client.post(
+        "/api/close",
+        files={
+            "recon": ("recon.json", recon_blob, "application/json"),
+            "statement": ("hdfc_locked.pdf", LOCKED.read_bytes(), "application/pdf"),
+        },
+        data={"statement_password": LOCKED_PASSWORD},
+    )
+    assert reply.status_code == 200, reply.text
+    assert "hdfc_locked.pdf" in reply.json()["source"]
+
+
+def test_the_password_is_not_echoed_back_anywhere(client):
+    reply = client.post(
+        "/api/statement",
+        files={"statement": ("hdfc_locked.pdf", LOCKED.read_bytes(), "application/pdf")},
+        data={"password": LOCKED_PASSWORD},
+    )
+    assert LOCKED_PASSWORD not in reply.text
+
+
+def test_inputs_say_what_the_data_covers_not_just_the_week_closed(client):
+    inputs = client.post("/api/demo?seed=1002582&week=0").json()["inputs"]
+    assert inputs["period"] == "2026-01-05 to 2026-01-11"
+    assert inputs["covers"].startswith("2026-01-05")
+    assert inputs["covers"] != inputs["period"]

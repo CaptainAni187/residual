@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { FileProvider } from "@/lib/files";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -25,13 +26,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/" className="wordmark">
               Residual
             </Link>
-            <Link href="/" className="alltools">
-              All tools
-            </Link>
+            <nav className="topnav">
+              <Link href="/" className="alltools">All tools</Link>
+              <Link href="/reconcile" className="alltools cta-link">Reconcile now</Link>
+            </nav>
           </div>
         </header>
 
-        <div className="shell">{children}</div>
+        <FileProvider>
+          <div className="shell">{children}</div>
+        </FileProvider>
 
         <footer className="footer">
           <div className="shell footer-in">

@@ -180,6 +180,21 @@ CATALOGUE: list[tuple[tuple[str, ...], str, str]] = [
 ]
 
 
+NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "twenty": 20, "fifty": 50,
+}
+
+
+def asked_for(question: str) -> int | None:
+    text = (question or "").lower()
+    for word, value in NUMBERS.items():
+        if re.search(rf"\b{word}\b", text):
+            return value
+    found = re.search(r"\b(?:top|first|last|biggest|largest)?\s*(\d{1,3})\b", text)
+    return int(found.group(1)) if found and 0 < int(found.group(1)) <= MAX_ROWS else None
+
+
 def from_catalogue(question: str) -> tuple[str, str] | None:
     text = (question or "").lower()
     best: tuple[int, str, str] | None = None
@@ -187,7 +202,14 @@ def from_catalogue(question: str) -> tuple[str, str] | None:
         hits = sum(1 for w in words if w in text)
         if hits and (best is None or hits > best[0]):
             best = (hits, title, sql)
-    return (best[1], best[2]) if best else None
+    if best is None:
+        return None
+    _, title, sql = best
+    wanted = asked_for(question)
+    if wanted and re.search(r"\bLIMIT \d+\s*$", sql):
+        sql = re.sub(r"\bLIMIT \d+\s*$", f"LIMIT {wanted}", sql)
+        title = re.sub(r"^the largest", f"the {wanted} largest", title)
+    return title, sql
 
 
 class Speaker(Protocol):
