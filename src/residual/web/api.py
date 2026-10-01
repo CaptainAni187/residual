@@ -220,7 +220,41 @@ class Inputs(BaseModel):
     checks_run: int
 
 
+class ActionOut(BaseModel):
+    cause: str
+    title: str
+    why: str
+    amount_paise: int
+    urgency: str
+    who: str
+    deadline: str
+    draft: str
+    impact: str
+
+
+class InsightOut(BaseModel):
+    totals: dict[str, int]
+    labels: dict[str, str]
+    recoverable_paise: int
+    actions: list[ActionOut]
+
+
+def _insight(close: Close, start: date, end: date) -> InsightOut:
+    from residual.explain.insights import BUCKET_LABEL, analyse
+
+    found = analyse(close, start, end)
+    return InsightOut(
+        totals=found.totals, labels=BUCKET_LABEL, recoverable_paise=found.recoverable_paise,
+        actions=[
+            ActionOut(cause=a.cause, title=a.title, why=a.why, amount_paise=a.amount_paise,
+                      urgency=a.urgency, who=a.who, deadline=a.deadline, draft=a.draft, impact=a.impact)
+            for a in found.actions
+        ],
+    )
+
+
 class CloseOut(BaseModel):
+    insight: InsightOut
     inputs: Inputs
     assumptions: list[str]
     token: str
@@ -262,6 +296,7 @@ def _assumptions(session: Session, close: Close) -> list[str]:
 
 def _shape(token: str, session: Session, close: Close) -> CloseOut:
     return CloseOut(
+        insight=_insight(close, session.start, session.end),
         inputs=Inputs(
             files=[part.strip() for part in session.source.split("+")],
             kind=session.kind,
@@ -691,4 +726,102 @@ async def gst_credit(
             "Claimable is what GSTR-2B shows against the gateway's GSTIN. Credit only becomes claimable once the gateway files that invoice.",
             f"{len(book.invoices)} invoice(s) were read from the return.",
         ],
+    )
+
+
+class WeekOut(BaseModel):
+    start: str
+    end: str
+    gross_paise: int
+    gap_paise: int
+    totals: dict[str, int]
+    fee_rate: float
+    contract_rate: float
+    overcharge_paise: int
+    flagged: int
+
+
+class QuarterOut(BaseModel):
+    source: str
+    covers: str
+    days: int
+    gross_paise: int
+    landed_paise: int
+    gap_paise: int
+    residual_paise: int
+    insight: InsightOut
+    weeks: list[WeekOut]
+    causes: list[dict[str, Any]]
+    hike_started: str
+    contracted_rate: float
+    headline: list[str]
+    assumptions: list[str]
+
+
+class QuarterIn(BaseModel):
+    token: str
+
+
+@router.post("/quarter", response_model=QuarterOut)
+def quarter(body: QuarterIn) -> QuarterOut:
+    from residual.explain.insights import _rupees as rs
+    from residual.explain.insights import bucket_of, week_of, weeks_between
+
+    session = _session(body.token)
+    first = min(e.occurred_at for e in session.events)
+    last = max(e.occurred_at for e in session.events)
+
+    whole = run_close(session.events, first, last, session.contracted, session.warehouse)
+    weeks = [
+        week_of(run_close(session.events, s, e, session.contracted, session.warehouse), s, e)
+        for s, e in weeks_between(first, last)
+    ]
+    insight = _insight(whole, first, last)
+
+    hike = next((w for w in weeks if w.overcharge_paise > 0), None)
+    if hike is not None:
+        since = sum(w.overcharge_paise for w in weeks if w.start >= hike.start)
+        days = (last - hike.start).days + 1
+        yearly = round(since * 365 / max(days, 1))
+        for action in insight.actions:
+            if action.cause == "fee_rate_increase":
+                action.impact = f"Recover what was overcharged, and stop about ₹{yearly // 100:,} a year"
+
+    gap = whole.gap.paise
+    act = insight.recoverable_paise
+    timing = insight.totals.get("timing", 0)
+    headline = [
+        f"{len(weeks)} weeks of activity, {rs(whole.variance.gross_captured.paise)} captured.",
+        f"{rs(gap)} of it never reached the bank inside this window.",
+    ]
+    if gap:
+        headline.append(
+            f"{act / gap:.0%} of that gap ({rs(act)}) is money you can act on: "
+            f"{rs(insight.totals.get('chase', 0))} to chase and {rs(insight.totals.get('tax', 0))} to claim back on tax."
+        )
+        if timing > 0:
+            headline.append(f"{timing / gap:.0%} is timing and will settle on its own.")
+    if hike is not None:
+        headline.append(f"Fees went above your contract from the week of {hike.start:%d %b} onward.")
+
+    rates = [float(r) for r in session.contracted.values()] if session.contracted else []
+    return QuarterOut(
+        source=session.source, covers=f"{first} to {last}", days=(last - first).days + 1,
+        gross_paise=whole.variance.gross_captured.paise, landed_paise=whole.variance.cash_landed.paise,
+        gap_paise=gap, residual_paise=whole.residual.paise, insight=insight,
+        weeks=[
+            WeekOut(start=w.start.isoformat(), end=w.end.isoformat(), gross_paise=w.gross_paise,
+                    gap_paise=w.gap_paise, totals=w.totals, fee_rate=w.fee_rate, contract_rate=w.contract_rate,
+                    overcharge_paise=w.overcharge_paise, flagged=w.flagged)
+            for w in weeks
+        ],
+        causes=[
+            {"cause": str(f.cause), "title": f.title, "amount_paise": f.amount.paise,
+             "bucket": bucket_of(f), "note": f.evidence.note}
+            for f in sorted(whole.findings, key=lambda f: -abs(f.amount.paise))
+        ],
+        hike_started=hike.start.isoformat() if hike else "",
+        contracted_rate=(sum(rates) / len(rates) / 100) if rates else 0.0,
+        headline=headline,
+        assumptions=_assumptions(session, whole),
     )

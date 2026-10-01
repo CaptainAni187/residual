@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
+import { ActionPlan } from "@/components/ActionPlan";
 import { AgentPanel } from "@/components/AgentPanel";
+import { BucketBars } from "@/components/BucketBars";
 import { CountUp } from "@/components/CountUp";
 import { FileSlot, type SlotProblem } from "@/components/FileSlot";
 import { Info } from "@/components/Info";
@@ -26,6 +28,11 @@ export type Mode = "reconcile" | "missing" | "fees";
 
 const FEE_CAUSES = ["normal_fee", "fee_rate_increase", "gst_on_fee", "instant_settlement_fee", "tds_194o"];
 const MISSING_CAUSES = ["settlement_never_arrived", "settlement_in_flight"];
+const PLAN: Record<Mode, string[] | null> = {
+  reconcile: null,
+  missing: ["settlement_never_arrived"],
+  fees: ["fee_rate_increase", "gst_on_fee", "tds_194o"],
+};
 
 const VERB: Record<Mode, string> = { reconcile: "Reconcile", missing: "Find missing payouts", fees: "Check my fees" };
 const FINE: Record<Mode, string> = {
@@ -306,11 +313,21 @@ export function ReconTool({ mode }: { mode: Mode }) {
             <div className="panel rise"><p className="said" style={{ margin: 0 }}>{FINE[mode]}</p></div>
           )}
 
+          {mode === "reconcile" && (
+            <div className="panel rise">
+              <div className="table-cap"><b>What kind of money it is</b></div>
+              <BucketBars totals={result.insight.totals} labels={result.insight.labels} gap={result.gap_paise} />
+            </div>
+          )}
+          <ActionPlan
+            token={result.token}
+            actions={result.insight.actions.filter((a) => !PLAN[mode] || PLAN[mode]!.includes(a.cause))}
+          />
           <AgentPanel token={result.token} actions={tool.agents} />
           <Assumed assumptions={result.assumptions} />
 
-          {mode !== "reconcile" && (
-            <Link className="next-link" href="/reconcile">See the full breakdown in Settlement Reconciler →</Link>
+          {(
+            <Link className="next-link" href="/dashboard">See your whole period on the dashboard →</Link>
           )}
         </div>
       )}

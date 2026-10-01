@@ -35,6 +35,8 @@ reports/*.html
 !reports/.gitkeep
 
 # Node / Next.js
+AGENTS.md
+CLAUDE.md
 node_modules/
 .next/
 next-env.d.ts

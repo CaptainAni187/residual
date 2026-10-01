@@ -20,7 +20,56 @@ export type Inputs = {
   checks_run: number;
 };
 
+export type Action = {
+  cause: string;
+  title: string;
+  why: string;
+  amount_paise: number;
+  urgency: "high" | "medium" | "low";
+  who: string;
+  deadline: string;
+  draft: string;
+  impact: string;
+};
+
+export type Insight = {
+  totals: Record<string, number>;
+  labels: Record<string, string>;
+  recoverable_paise: number;
+  actions: Action[];
+};
+
+export type Week = {
+  start: string;
+  end: string;
+  gross_paise: number;
+  gap_paise: number;
+  totals: Record<string, number>;
+  fee_rate: number;
+  contract_rate: number;
+  overcharge_paise: number;
+  flagged: number;
+};
+
+export type Quarter = {
+  source: string;
+  covers: string;
+  days: number;
+  gross_paise: number;
+  landed_paise: number;
+  gap_paise: number;
+  residual_paise: number;
+  insight: Insight;
+  weeks: Week[];
+  causes: { cause: string; title: string; amount_paise: number; bucket: string; note: string }[];
+  hike_started: string;
+  contracted_rate: number;
+  headline: string[];
+  assumptions: string[];
+};
+
 export type CloseResult = {
+  insight: Insight;
   inputs: Inputs;
   assumptions: string[];
   token: string;
@@ -209,6 +258,7 @@ export function checkGst(recon: File, gstr2b: File) {
 export const explainCause = (token: string, cause: string) => send<Explanation>("/api/explain", json({ token, cause }));
 export const askQuestion = (token: string, question: string) => send<Answer>("/api/ask", json({ token, question }));
 export const investigate = (token: string, cause = "") => send<Investigation>("/api/investigate", json({ token, cause }));
+export const quarter = (token: string) => send<Quarter>("/api/quarter", json({ token }));
 export const draftAction = (token: string, kind: DraftKind) => send<Draft>("/api/draft", json({ token, kind }));
 
 export function rupees(paise: number): string {

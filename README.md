@@ -21,6 +21,8 @@ A merchant captures ₹8.9 lakh in a week and ₹7.7 lakh reaches the bank. The 
 
 Each result says what went in, what was checked, what needs chasing, and what it assumed — so if an assumption is wrong for you, you can see it.
 
+The **dashboard** puts a whole quarter on one page: how much of the gap you can actually get back, how your fee rate moved against your contract (it flags the week a hike started), and a ranked action plan — each step with an amount, a deadline and a drafted email. It exports as a one-page PDF report: problem, data, findings, root causes, recommendations.
+
 ## Decisions I made
 
 **The answer is arithmetic, not a guess.** Every payment becomes double-entry bookkeeping, so the gap *has* to equal the movement of every other account. If anything is left unexplained, that's a bug, not a judgement call. Every week in the benchmark closes to ₹0.00.
@@ -62,7 +64,9 @@ flowchart LR
 | Weekly closes reaching ₹0.00 unexplained | 13 / 13 |
 | Causes the agent traced on its own | 87 / 87 |
 | Fault-injection runs with every invariant holding | 3,000 |
-| Tests | 620 |
+| Tests | 631 |
+
+Across 8 simulated merchants, an average quarter left about ₹1.82 lakh on the table — money to chase from the gateway or claim back on tax.
 
 I also ran it against real Razorpay test-mode payments. That caught a bug the simulated data never would: Razorpay reports its fee *including* GST, and I was counting the GST twice. Four real payments, four banks, all at exactly 2.0000% once fixed.
 

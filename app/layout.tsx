@@ -28,6 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <nav className="topnav">
               <Link href="/" className="alltools">All tools</Link>
+              <Link href="/dashboard" className="alltools">Dashboard</Link>
               <Link href="/reconcile" className="alltools cta-link">Reconcile now</Link>
             </nav>
           </div>

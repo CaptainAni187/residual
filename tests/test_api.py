@@ -373,3 +373,20 @@ def test_inputs_say_what_the_data_covers_not_just_the_week_closed(client):
     assert inputs["period"] == "2026-01-05 to 2026-01-11"
     assert inputs["covers"].startswith("2026-01-05")
     assert inputs["covers"] != inputs["period"]
+
+
+def test_the_quarter_finds_the_fee_hike_in_the_right_week(client):
+    token = client.post("/api/demo?seed=20260822&week=8").json()["token"]
+    q = client.post("/api/quarter", json={"token": token}).json()
+    assert q["residual_paise"] == 0
+    assert len(q["weeks"]) == 13
+    assert q["hike_started"] == "2026-02-02"
+    assert sum(q["insight"]["totals"].values()) == q["gap_paise"]
+    assert q["insight"]["actions"][0]["cause"] == "settlement_never_arrived"
+    assert q["causes"] and q["headline"]
+
+
+def test_every_result_carries_its_action_plan(client):
+    body = client.post("/api/demo?seed=20260822&week=8").json()
+    assert body["insight"]["recoverable_paise"] > 0
+    assert [a["cause"] for a in body["insight"]["actions"]][:2] == ["settlement_never_arrived", "fee_rate_increase"]

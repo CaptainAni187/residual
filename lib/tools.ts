@@ -60,7 +60,6 @@ export const TOOLS: Tool[] = [
       "Every payment becomes double-entry bookkeeping, so the difference between what you captured and what reached your bank has to equal the movement in every other account — fees, tax, refunds, holds, timing. Each line is measured with its own query, and the result only stands if nothing is left over.",
     agents: [
       { kind: "second_opinion", label: "Get a second opinion", does: "An agent is told only that the books are short, and has to work out on its own what caused the biggest flagged line." },
-      { kind: "draft", draft: "escalate", label: "Draft the escalation", does: "A ready-to-send email listing everything that needs chasing, with amounts and references." },
     ],
   },
   {
@@ -73,7 +72,6 @@ export const TOOLS: Tool[] = [
     about:
       "A payout is marked missing when the gateway recorded it as executed and no bank credit can be linked to its UTR more than three working days later. Payouts still inside that window are counted as in transit, not lost.",
     agents: [
-      { kind: "draft", draft: "payout_trace", label: "Draft a payout trace", does: "An email asking the gateway to trace each missing payout by its UTR." },
       { kind: "second_opinion", cause: "settlement_never_arrived", label: "Double-check it", does: "An agent has to trace the missing amount to its cause on its own, without being told it is a lost payout." },
     ],
   },
@@ -88,7 +86,6 @@ export const TOOLS: Tool[] = [
     about:
       "Each captured payment is priced at your contracted rate for its method and compared with the fee actually billed. The gateway reports its fee including GST, so the tax is separated out first — otherwise every fee would look 18% too high.",
     agents: [
-      { kind: "draft", draft: "fee_dispute", label: "Draft a fee dispute", does: "An email asking for the excess to be credited back, with the exact amount." },
       { kind: "second_opinion", cause: "fee_rate_increase", label: "Double-check it", does: "An agent has to find the overcharge on its own, without being told it is a fee problem." },
     ],
   },
@@ -111,7 +108,7 @@ export const TOOLS: Tool[] = [
     ],
     about:
       "GST on a gateway's fee is only claimable once the gateway has declared that invoice, at which point it appears in your GSTR-2B. This compares the tax you actually paid with what the return makes available, and checks the supplier GSTIN is valid.",
-    agents: [{ kind: "draft", draft: "gst_followup", label: "Draft a GST follow-up", does: "An email asking the gateway to file the missing invoices before the claim window closes." }],
+    agents: [],
   },
   {
     slug: "statement",

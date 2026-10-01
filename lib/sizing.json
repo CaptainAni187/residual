@@ -1,0 +1,9 @@
+{
+  "merchants": 8,
+  "days": 90,
+  "avg_captured_paise": 1096085200,
+  "avg_recoverable_paise": 18223505,
+  "avg_chase_paise": 14046338,
+  "avg_tax_paise": 4177167,
+  "recoverable_share_of_captured": 0.0166
+}
