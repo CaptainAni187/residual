@@ -340,20 +340,30 @@ def health() -> dict[str, Any]:
     return {"ok": True, "sessions": len(_SESSIONS), "stores_uploads": False}
 
 
+_CHECKED: dict[str, Any] = {}
+
+
 @router.get("/providers")
-def providers() -> dict[str, Any]:
-    from residual.agents.chat import available
+def providers(check: bool = False) -> dict[str, Any]:
+    from residual.agents.chat import available, check_all
 
     ready = available()
-    return {
+    out: dict[str, Any] = {
         "configured": ready,
+        "order": ready,
         "using": ready[0] if ready else "offline",
         "note": (
             "No model key is set, so explanations are written from the verifier's own output."
             if not ready
-            else "Every figure a model writes is checked against what a verifier returned."
+            else "Tried in order; if one fails the next answers. Every figure a model writes is checked against a verifier."
         ),
     }
+    if check and ready:
+        # A live ping costs quota, so one result is reused for ten minutes.
+        if not _CHECKED or time.monotonic() - _CHECKED["at"] > 600:
+            _CHECKED.update(at=time.monotonic(), status=check_all())
+        out["status"] = _CHECKED["status"]
+    return out
 
 
 @router.post("/close", response_model=CloseOut)
@@ -526,11 +536,27 @@ class InvestigateOut(BaseModel):
     proposal: dict[str, Any] | None
     verdict: str
     accepted: bool
+    notes: list[str] = []
+
+
+def _drivers() -> list[Any]:
+    """Models first, in router order (at most two, to stay inside the function's time limit), then the analyst."""
+    from residual.agents.chat import available
+    from residual.agents.loop import PROVIDERS, Analyst, OpenAIDriver
+
+    models: list[Any] = [OpenAIDriver(p) for p in available() if p in PROVIDERS][:2]
+    return [*models, Analyst()]
+
+
+def _label(driver: Any) -> str:
+    provider = getattr(driver, "provider", "")
+    return f"{provider}/{driver.model}" if provider else "analyst"
 
 
 @router.post("/investigate", response_model=InvestigateOut)
 def investigate_residual(body: InvestigateIn) -> InvestigateOut:
-    from residual.agents.loop import Analyst, investigate
+    from residual.agents.chat import why
+    from residual.agents.loop import investigate
     from residual.agents.tasks import rediscover_with_agent
     from residual.agents.tools import Toolbelt
     from residual.domain.causes import Cause
@@ -540,10 +566,12 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
     close = session.close()
 
     if close.residual.paise != 0 and not body.cause:
-        belt = Toolbelt(session.warehouse, close, session.start, session.end, session.contracted)
-        run = investigate(belt, Analyst())
-        verdict = adjudicate(session.warehouse, run.proposal, close)
         mode, cause_name, short = "open_residual", "", str(close.residual)
+
+        def attempt(driver: Any) -> tuple[Any, Any]:
+            belt = Toolbelt(session.warehouse, close, session.start, session.end, session.contracted)
+            run = investigate(belt, driver)
+            return run, adjudicate(session.warehouse, run.proposal, close)
     else:
         candidates = [f for f in close.findings if f.amount.paise and not refined_by(f.cause, session.contracted)]
         if body.cause:
@@ -557,15 +585,29 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
                 "It checks lines that stand on their own; this one is part of another.",
             )
         target = candidates[0]
-        found = rediscover_with_agent(
-            session.events, session.start, session.end, session.contracted,
-            session.warehouse, Cause(str(target.cause)), Analyst(),
-        )
-        run, verdict = found.run, found.verdict
         mode, cause_name, short = "second_opinion", str(target.cause), str(target.amount)
 
+        def attempt(driver: Any) -> tuple[Any, Any]:
+            found = rediscover_with_agent(
+                session.events, session.start, session.end, session.contracted,
+                session.warehouse, Cause(str(target.cause)), driver,
+            )
+            return found.run, found.verdict
+
+    notes: list[str] = []
+    drivers = _drivers()
+    for driver in drivers:
+        try:
+            run, verdict = attempt(driver)
+        except Exception as exc:  # noqa: BLE001 - a model failure hands over to the next driver
+            notes.append(f"{_label(driver)} did not answer ({why(exc)})")
+            continue
+        if verdict.accepted or driver is drivers[-1]:
+            break
+        notes.append(f"{_label(driver)} proposed an answer the verifier rejected: {verdict.reason()}")
+
     return InvestigateOut(
-        mode=mode, cause=cause_name, driver="analyst", short_by=short,
+        mode=mode, cause=cause_name, driver=_label(driver), short_by=short,
         steps=[
             StepOut(tool=s.tool, args=s.args, ok=s.ok,
                     found=str(s.result.get("amount", "")) if s.ok and isinstance(s.result, dict) else "")
@@ -574,6 +616,7 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
         proposal=({"name": run.proposal.name, "accounts": list(run.proposal.accounts), "sql": run.proposal.sql} if run.proposal else None),
         verdict=verdict.reason(),
         accepted=verdict.accepted,
+        notes=notes,
     )
 
 

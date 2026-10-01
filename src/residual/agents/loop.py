@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
@@ -264,7 +265,7 @@ PROVIDERS: dict[str, dict[str, str]] = {
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "env": "GEMINI_API_KEY",
-        "model": "gemini-2.0-flash",
+        "model": "gemini-2.5-flash",
     },
     "grok": {
         "base_url": "https://api.x.ai/v1",
@@ -274,7 +275,7 @@ PROVIDERS: dict[str, dict[str, str]] = {
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
         "env": "OPENROUTER_API_KEY",
-        "model": "meta-llama/llama-3.3-70b-instruct",
+        "model": "meta-llama/llama-3.3-70b-instruct:free",
     },
 }
 
@@ -294,7 +295,8 @@ class OpenAIDriver:
         self.provider = provider
         self.base_url = spec["base_url"]
         self.env = spec["env"]
-        self.model = self.name = model or spec["model"]
+        override = os.environ.get(f"{provider.upper()}_MODEL", "").strip()
+        self.model = self.name = model or override or spec["model"]
         self._key = api_key
         self._post = post
         self._messages: list[dict[str, Any]] = []
@@ -317,7 +319,7 @@ class OpenAIDriver:
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.key()}"},
             json=body,
-            timeout=90,
+            timeout=20,
         )
         reply.raise_for_status()
         return cast(dict[str, Any], reply.json())

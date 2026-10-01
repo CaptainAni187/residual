@@ -90,7 +90,7 @@ def explain(finding: Finding, close: Close, chat: Speaker | None = None) -> Expl
     except Exception as exc:  # noqa: BLE001 - a provider failure must not lose the answer
         return Explanation(
             str(finding.cause), fallback(finding, close), True, "offline",
-            f"{type(exc).__name__} from the model, so the written fallback was used",
+            f"the model did not answer ({exc or type(exc).__name__}), so the written fallback was used",
         )
 
     if not text:

@@ -109,6 +109,7 @@ export type Investigation = {
   proposal: { name: string; accounts: string[]; sql: string } | null;
   verdict: string;
   accepted: boolean;
+  notes: string[];
 };
 
 export type DraftKind = "escalate" | "payout_trace" | "fee_dispute" | "gst_followup";

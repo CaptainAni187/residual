@@ -39,8 +39,8 @@ function Transcript({ run }: { run: Investigation }) {
           <span className="t-n">{i + 1}</span>
           <span className="t-what">
             {TOOL_WORDS[step.tool] ?? step.tool}
-            {Object.keys(step.args).length > 0 && (
-              <em> · {Object.values(step.args).map(String).join(", ").replace(/_/g, " ")}</em>
+            {Object.keys(step.args).some((k) => !k.startsWith("_")) && (
+              <em> · {Object.entries(step.args).filter(([k]) => !k.startsWith("_")).map(([, v]) => String(v)).join(", ").replace(/_/g, " ")}</em>
             )}
           </span>
           <span className="t-found mono">{step.found.replace("INR ", "₹")}</span>
@@ -52,6 +52,12 @@ function Transcript({ run }: { run: Investigation }) {
             ? `Independently confirmed — traced ${run.short_by.replace("INR ", "₹")} to the same cause, without being told what caused it.`
             : `Could not confirm — ${run.verdict}`}
         </div>
+      )}
+      {shown > run.steps.length && (
+        <p className="t-driver">
+          {run.driver === "analyst" ? "Worked by the built-in analyst" : `Driven by ${run.driver}`} · every step checked by the verifier
+          {run.notes.length > 0 && <span title={run.notes.join("\n")}> · fell back after {run.notes.length} model{run.notes.length === 1 ? "" : "s"}</span>}
+        </p>
       )}
       {shown <= run.steps.length && <div className="t-typing" aria-hidden="true"><i /><i /><i /></div>}
     </div>

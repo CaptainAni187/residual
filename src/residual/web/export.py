@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, is_dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -190,7 +190,7 @@ def build(live: dict[str, Any] | None = None) -> dict[str, Any]:
 
     captures = list(select.captures(events))
     return {
-        "generated": datetime.now(tz=UTC).date().isoformat(),
+        "generated": (result.start + timedelta(days=BENCHMARK.days - 1)).isoformat(),
         "meta": {
             "events": len(events),
             "postings": warehouse.sql("SELECT count(*) FROM postings")[0][0],

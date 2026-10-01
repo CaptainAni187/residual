@@ -430,9 +430,6 @@ pre.sql { margin: 8px 0 0; padding: 11px 13px; background: var(--paper); border:
 .ctip em { font-style: normal; margin-left: 8px; }
 
 /* landing additions */
-.sizing { margin-top: 18px; display: inline-block; line-height: 1.6; background: var(--paper);
-  border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: 13.5px; color: var(--ink-2); }
-.sizing b { color: var(--ink); font-family: var(--mono); }
 .dash-card { margin-top: 26px; display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap;
   background: var(--ink); color: var(--paper); border-radius: var(--radius); padding: 22px 24px; text-decoration: none;
   transition: transform .2s var(--ease), box-shadow .2s var(--ease); }
@@ -480,3 +477,4 @@ pre.sql { margin: 8px 0 0; padding: 11px 13px; background: var(--paper); border:
   background: var(--accent-soft); }
 .sample-file:hover { text-decoration: underline; }
 .sample .btn { align-self: flex-start; margin-top: 4px; }
+.t-driver { margin: 8px 0 0; font-size: 12px; color: var(--ink-3); }
