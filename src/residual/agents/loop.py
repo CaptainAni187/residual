@@ -275,9 +275,91 @@ PROVIDERS: dict[str, dict[str, str]] = {
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
         "env": "OPENROUTER_API_KEY",
-        "model": "meta-llama/llama-3.3-70b-instruct:free",
+        "model": "qwen/qwen3.8-27b:free",
     },
 }
+
+
+# Substrings preferred per provider, best first, and ones that mark a model unfit for chat.
+PREFER: dict[str, tuple[str, ...]] = {
+    "groq": ("llama-3.3-70b", "gpt-oss-120b", "llama-4", "qwen", "llama", "gpt-oss"),
+    "gemini": ("flash", "pro"),
+    "openrouter": ("llama-3.3-70b", "gpt-oss-120b", "qwen", "deepseek", "llama", "gemma", ""),
+    "grok": ("grok",),
+}
+UNFIT = (
+    "whisper", "tts", "guard", "embed", "audio", "image", "vision", "live", "native",
+    "transcribe", "moderation", "orpheus", "playai", "lite", "thinking", "learnlm", "gemma-3n",
+)
+_LIVE: dict[str, str] = {}
+
+
+def override_for(provider: str) -> str:
+    return os.environ.get(f"{provider.upper()}_MODEL", "").strip()
+
+
+def current_model(provider: str) -> str:
+    """The env override if set, else a model found to work this run, else the shipped default."""
+    return override_for(provider) or _LIVE.get(provider) or PROVIDERS[provider]["model"]
+
+
+def _version(model: str) -> tuple[int, ...]:
+    return tuple(int(n) for n in re.findall(r"\d+", model))
+
+
+def choose(provider: str, catalogue: list[dict[str, Any]]) -> str | None:
+    """Pick a chat model from a provider's /models listing."""
+    ids = []
+    for entry in catalogue:
+        model = str(entry.get("id") or entry.get("name") or "").removeprefix("models/")
+        params = entry.get("supported_parameters")
+        if not model or any(word in model.lower() for word in UNFIT):
+            continue
+        if provider == "openrouter" and (not model.endswith(":free") or (params is not None and "tools" not in params)):
+            continue
+        ids.append(model)
+    for want in PREFER.get(provider, ("",)):
+        matches = [m for m in ids if want in m.lower()]
+        if matches:
+            return max(matches, key=_version)
+    return None
+
+
+def discover(provider: str, key: str) -> str | None:
+    """Ask the provider what it serves today. Any failure means 'no better idea'."""
+    import httpx
+
+    try:
+        reply = httpx.get(
+            f"{PROVIDERS[provider]['base_url']}/models",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=10,
+        )
+        reply.raise_for_status()
+        body = reply.json()
+    except Exception:  # noqa: BLE001 - discovery is best effort
+        return None
+    listing = (body.get("data") or body.get("models") or []) if isinstance(body, dict) else []
+    return choose(provider, [e for e in listing if isinstance(e, dict)] if isinstance(listing, list) else [])
+
+
+def post_chat(provider: str, key: str, payload: dict[str, Any], timeout: float) -> tuple[dict[str, Any], str]:
+    """POST a chat completion; if the model is gone (404) and none was pinned, find a live one and retry once."""
+    import httpx
+
+    url = f"{PROVIDERS[provider]['base_url']}/chat/completions"
+    headers = {"Authorization": f"Bearer {key}"}
+    body = {**payload, "model": payload.get("model") or current_model(provider)}
+    reply = httpx.post(url, headers=headers, json=body, timeout=timeout)
+    if reply.status_code == 404 and not override_for(provider):
+        found = discover(provider, key)
+        if found and found != body["model"]:
+            body["model"] = found
+            reply = httpx.post(url, headers=headers, json=body, timeout=timeout)
+            if reply.status_code < 400:
+                _LIVE[provider] = found
+    reply.raise_for_status()
+    return cast(dict[str, Any], reply.json()), str(body["model"])
 
 
 class OpenAIDriver:
@@ -295,15 +377,13 @@ class OpenAIDriver:
         self.provider = provider
         self.base_url = spec["base_url"]
         self.env = spec["env"]
-        override = os.environ.get(f"{provider.upper()}_MODEL", "").strip()
-        self.model = self.name = model or override or spec["model"]
+        self._pinned = bool(model)
+        self.model = self.name = model or current_model(provider)
         self._key = api_key
         self._post = post
         self._messages: list[dict[str, Any]] = []
 
     def key(self) -> str:
-        import os
-
         key = self._key or os.environ.get(self.env, "")
         if not key:
             raise RuntimeError(f"{self.env} is not set, so {self.provider} cannot be called")
@@ -313,16 +393,9 @@ class OpenAIDriver:
         if self._post is not None:
             return cast(dict[str, Any], self._post(body))
 
-        import httpx
-
-        reply = httpx.post(
-            f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.key()}"},
-            json=body,
-            timeout=20,
-        )
-        reply.raise_for_status()
-        return cast(dict[str, Any], reply.json())
+        reply, used = post_chat(self.provider, self.key(), {**body, "model": self.model if self._pinned else ""}, 20)
+        self.model = self.name = used
+        return reply
 
     def act(self, belt: Toolbelt, run: Run) -> Action | None:
         if not self._messages:

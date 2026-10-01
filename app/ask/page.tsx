@@ -25,7 +25,9 @@ export default function AskTool() {
   const [loaded, setLoaded] = useState<CloseResult | null>(null);
   const [phase, setPhase] = useState<"input" | "running">("input");
   const [failed, setFailed] = useState(false);
-  const [problem, setProblem] = useState<SlotProblem>(null);
+  const [problems, setProblems] = useState<Record<string, SlotProblem>>({});
+  const [password, setPassword] = useState("");
+  const [askPassword, setAskPassword] = useState(false);
   const [general, setGeneral] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
@@ -39,7 +41,7 @@ export default function AskTool() {
   const load = async (work: () => Promise<CloseResult>) => {
     setPhase("running");
     setFailed(false);
-    setProblem(null);
+    setProblems({});
     setGeneral("");
     try {
       setLoaded(await work());
@@ -47,7 +49,8 @@ export default function AskTool() {
     } catch (err) {
       setFailed(true);
       const e = err instanceof ApiError ? err : new ApiError("Something went wrong.", "error", "Try again.");
-      if (e.field === "recon") setProblem({ message: e.message, fix: e.fix });
+      if (e.code === "needs_password" || e.code === "bad_password") setAskPassword(true);
+      if (e.field) setProblems({ [e.field]: { message: e.message, fix: e.fix } });
       else setGeneral([e.message, e.fix].filter(Boolean).join(" "));
     } finally {
       setTimeout(() => setPhase("input"), failed ? 700 : 0);
@@ -77,19 +80,27 @@ export default function AskTool() {
     <ToolShell slug="ask">
       {!loaded ? (
         <div className="panel inputs rise">
-          <FileSlot
-            slot={tool.slots[0]}
-            file={files.recon ?? null}
-            onChange={(f) => { put("recon", f); setProblem(null); }}
-            problem={problem}
-          />
+          <div className="stack">
+            {tool.slots.map((slot) => (
+              <FileSlot
+                key={slot.id}
+                slot={slot}
+                file={files[slot.id] ?? null}
+                onChange={(f) => { put(slot.id, f); setProblems((p) => ({ ...p, [slot.id]: null })); }}
+                problem={problems[slot.id] ?? null}
+                askPassword={slot.id === "statement" && askPassword}
+                password={password}
+                onPassword={setPassword}
+              />
+            ))}
+          </div>
           {phase === "running" ? (
             <Stages steps={["Reading your file", "Building your books", "Getting ready for questions"]} done={false} failed={failed} />
           ) : (
             <div className="cta-row">
               <button
                 className="btn btn-lg"
-                onClick={() => (files.recon ? load(() => closeUpload(files.recon!, null, "")) : setProblem({ message: "Add your Razorpay report to continue." }))}
+                onClick={() => (files.recon ? load(() => closeUpload(files.recon!, files.statement ?? null, "", password)) : setProblems({ recon: { message: "Add your Razorpay report to continue." } }))}
               >
                 Load my data
               </button>
@@ -98,8 +109,11 @@ export default function AskTool() {
           {general && <div className="banner" role="alert"><b>{general}</b></div>}
           <SamplePicker
             tool="ask"
-            slots={["recon"]}
-            onRun={(l) => { put("recon", l.files.recon); load(() => closeUpload(l.files.recon, null, l.rates)); }}
+            slots={["recon", "statement"]}
+            onRun={(l) => {
+              Object.entries(l.files).forEach(([id, f]) => put(id, f));
+              load(() => closeUpload(l.files.recon, l.files.statement ?? null, l.rates));
+            }}
             disabled={phase === "running"}
           />
         </div>

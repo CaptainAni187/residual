@@ -76,7 +76,7 @@ flowchart LR
 | Weekly closes reaching ₹0.00 unexplained | 13 / 13 |
 | Causes the agent traced on its own | 87 / 87 |
 | Fault-injection runs with every invariant holding | 3,000 |
-| Tests | 655 |
+| Tests | 674 |
 
 I also ran it against real Razorpay test-mode payments. That caught a bug the simulated data never would: Razorpay reports its fee *including* GST, and I was counting the GST twice. Four real payments, four banks, all at exactly 2.0000% once fixed.
 

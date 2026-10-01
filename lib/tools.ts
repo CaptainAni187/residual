@@ -128,7 +128,7 @@ export const TOOLS: Tool[] = [
     does: "Ask anything about your payments and get the answer.",
     category: "Ask",
     icon: "ask",
-    slots: [REPORT],
+    slots: [REPORT, { ...STATEMENT, help: `${STATEMENT.help} Optional — add it to ask about payouts reaching your bank.` }],
     about:
       "Your question is turned into a single read-only query over your data, and the query is shown with every answer. Anything that is not a plain read — changing or deleting data — is refused before it runs.",
     agents: [],

@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from residual.agents import chat
+from residual.agents import chat, loop
 from residual.web.app import app
 
 KEYS = ("GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "ANTHROPIC_API_KEY")
@@ -16,6 +16,13 @@ KEYS = ("GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "
 def no_keys(monkeypatch):
     for key in KEYS:
         monkeypatch.delenv(key, raising=False)
+        monkeypatch.delenv(key.replace("API_KEY", "MODEL"), raising=False)
+    monkeypatch.setattr(loop, "_LIVE", {})
+
+    def offline(url, **kwargs):
+        raise httpx.ConnectError("no network in tests")
+
+    monkeypatch.setattr(httpx, "get", offline)
 
 
 def _reply(status: int, text: str = "ok") -> httpx.Response:
@@ -79,3 +86,88 @@ def test_the_live_check_reports_each_provider(monkeypatch):
     status = chat.check_all()
     assert status["groq"].startswith("ok")
     assert status["gemini"].startswith("HTTP 404")
+
+
+def test_a_retired_model_is_replaced_by_one_the_provider_still_serves(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    asked: list[str] = []
+
+    def post(url, json, **kw):
+        asked.append(json["model"])
+        return _reply(404) if json["model"] == loop.PROVIDERS["groq"]["model"] else _reply(200, "fresh")
+
+    listing = {"data": [{"id": "whisper-large-v3"}, {"id": "llama-guard-4"}, {"id": "openai/gpt-oss-120b"}]}
+    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: httpx.Response(200, json=listing, request=httpx.Request("GET", url)))
+    assert chat.Chat().say("s", "p") == "fresh"
+    assert asked == [loop.PROVIDERS["groq"]["model"], "openai/gpt-oss-120b"]
+    assert chat.model_for("groq") == "openai/gpt-oss-120b"
+
+
+def test_a_pinned_model_is_never_swapped(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    monkeypatch.setenv("GROQ_MODEL", "pinned")
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: _reply(404))
+    with pytest.raises(chat.AllProvidersFailed):
+        chat.Chat().say("s", "p")
+    assert chat.model_for("groq") == "pinned"
+
+
+@pytest.mark.parametrize(
+    ("provider", "listing", "picked"),
+    [
+        ("gemini", ["models/gemini-2.5-flash", "models/gemini-3-flash", "models/gemini-3-flash-image", "models/embedding-001"], "gemini-3-flash"),
+        ("groq", ["whisper-large-v3", "qwen/qwen3-32b", "llama-3.3-70b-versatile"], "llama-3.3-70b-versatile"),
+        ("openrouter", ["meta-llama/llama-3.3-70b-instruct", "qwen/qwen3-coder:free"], "qwen/qwen3-coder:free"),
+    ],
+)
+def test_the_chooser_picks_a_chat_model(provider, listing, picked):
+    assert loop.choose(provider, [{"id": m} for m in listing]) == picked
+
+
+def test_openrouter_free_models_must_support_tools():
+    listing = [
+        {"id": "a/llama-3.3-70b-instruct:free", "supported_parameters": ["max_tokens"]},
+        {"id": "b/qwen-2.5:free", "supported_parameters": ["tools", "max_tokens"]},
+    ]
+    assert loop.choose("openrouter", listing) == "b/qwen-2.5:free"
+
+
+def _ask(client, token, question):
+    return client.post("/api/ask", json={"token": token, "question": question}).json()
+
+
+def test_every_starter_question_is_answered_when_every_model_is_down(monkeypatch):
+    from tests.test_samples import MANIFEST, upload
+
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    calls: list[str] = []
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: calls.append(url) or _reply(503))
+    client = TestClient(app)
+    files = MANIFEST["sets"]["missing"]["files"]
+    token = client.post(
+        "/api/close", files=dict(upload(s, files[s]) for s in ("recon", "statement")), data={"contract": MANIFEST["rates"]},
+    ).json()["token"]
+    starters = [
+        "Which payouts never reached my bank?",
+        "How much did I pay in fees, by method?",
+        "What were my five biggest payouts?",
+        "How many payments failed, and by which method?",
+        "How much did I refund this period?",
+    ]
+    for question in starters:
+        calls.clear()
+        body = _ask(client, token, question)
+        assert body["source"].startswith("catalogue"), (question, body)
+        assert len(calls) == 1, "a failed model must not be asked twice"
+    assert _ask(client, token, starters[0])["rows"], "the lost payout should be listed"
+
+
+def test_asking_about_missing_payouts_without_a_statement_says_what_is_needed(monkeypatch):
+    from tests.test_samples import MANIFEST, upload
+
+    client = TestClient(app)
+    token = client.post("/api/close", files=dict([upload("recon", MANIFEST["sets"]["missing"]["files"]["recon"])])).json()["token"]
+    body = _ask(client, token, "Which payouts never reached my bank?")
+    assert not body["rows"]
+    assert "bank statement" in body["note"]

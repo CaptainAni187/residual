@@ -102,6 +102,8 @@ def run(wh: Warehouse, sql: str, question: str = "", source: str = "catalogue") 
     return Answer(question=question, sql=safe, columns=columns, rows=rows, source=source)
 
 
+NEEDS_BANK = "settlements with no bank credit linked to them"
+
 CATALOGUE: list[tuple[tuple[str, ...], str, str]] = [
     (
         ("biggest", "largest", "top"),
@@ -114,7 +116,7 @@ CATALOGUE: list[tuple[tuple[str, ...], str, str]] = [
     ),
     (
         ("never arrived", "never landed", "missing", "not arrive", "unpaid",
-         "didn't arrive", "did not arrive"),
+         "didn't arrive", "did not arrive", "never reached", "not reach", "didn't reach"),
         "settlements with no bank credit linked to them",
         (
             "SELECT s.entity_id AS settlement, s.utr, s.occurred_at AS settled_on, "
@@ -122,6 +124,15 @@ CATALOGUE: list[tuple[tuple[str, ...], str, str]] = [
             "LEFT JOIN credit_links cl ON cl.settlement_id = s.entity_id "
             "WHERE s.type = 'settlement_executed' AND cl.settlement_id IS NULL "
             "ORDER BY s.amount_paise DESC"
+        ),
+    ),
+    (
+        ("failed", "declined", "failure"),
+        "failed payments, by method",
+        (
+            "SELECT method, count(*) AS failed_payments, sum(amount_paise) AS amount_paise "
+            "FROM events WHERE type = 'payment_failed' "
+            "GROUP BY method ORDER BY failed_payments DESC"
         ),
     ),
     (
@@ -228,6 +239,7 @@ def ask(
     model: LLMClient | None = None,
     speaker: Speaker | None = None,
 ) -> Answer:
+    answered: Answer | None = None
     if speaker is not None and speaker.ready:
         answered = _ask_speaker(wh, question, speaker)
         if answered.ok:
@@ -235,12 +247,17 @@ def ask(
 
     if (hit := from_catalogue(question)) is not None:
         title, sql = hit
+        if title == NEEDS_BANK and not wh.sql("SELECT count(*) FROM events WHERE type = 'bank_credit_received'")[0][0]:
+            return Answer(
+                question=question, sql="", source=f"catalogue: {title}",
+                refused="that needs your bank statement — load it alongside the report and ask again",
+            )
         answer = run(wh, sql, question=question, source=f"catalogue: {title}")
         if answer.ok:
             return answer
 
-    if speaker is not None and speaker.ready:
-        return _ask_speaker(wh, question, speaker)
+    if answered is not None:
+        return answered
 
     if model is None:
         return Answer(
@@ -302,7 +319,7 @@ def _ask_speaker(wh: Warehouse, question: str, speaker: Speaker) -> Answer:
             question=question,
             sql="",
             source=speaker.describe(),
-            refused=f"the model could not be reached: {type(exc).__name__}",
+            refused=f"the model could not be reached ({exc or type(exc).__name__})",
         )
 
     sql = re.sub(r"^```(?:sql)?|```$", "", text, flags=re.MULTILINE).strip()
