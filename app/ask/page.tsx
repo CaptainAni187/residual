@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { FileSlot, type SlotProblem } from "@/components/FileSlot";
+import { SamplePicker } from "@/components/SamplePicker";
 import { Stages } from "@/components/Stages";
 import { ToolShell } from "@/components/ToolShell";
-import { ApiError, type Answer, type CloseResult, askQuestion, closeUpload, demoClose } from "@/lib/api";
+import { ApiError, type Answer, type CloseResult, askQuestion, closeUpload } from "@/lib/api";
 import { useFiles } from "@/lib/files";
 import { bySlug } from "@/lib/tools";
 
@@ -92,10 +93,15 @@ export default function AskTool() {
               >
                 Load my data
               </button>
-              <button className="btn btn-ghost" onClick={() => load(demoClose)}>Try with sample data</button>
             </div>
           )}
           {general && <div className="banner" role="alert"><b>{general}</b></div>}
+          <SamplePicker
+            tool="ask"
+            slots={["recon"]}
+            onRun={(l) => { put("recon", l.files.recon); load(() => closeUpload(l.files.recon, null, l.rates)); }}
+            disabled={phase === "running"}
+          />
         </div>
       ) : (
         <div className="chat rise">

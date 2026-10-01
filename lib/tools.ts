@@ -54,7 +54,7 @@ export const TOOLS: Tool[] = [
     does: "See exactly where the difference between captured and banked went.",
     category: "Reconcile",
     icon: "scale",
-    slots: [REPORT, STATEMENT],
+    slots: [REPORT, { ...STATEMENT, required: true }],
     rates: "optional",
     about:
       "Every payment becomes double-entry bookkeeping, so the difference between what you captured and what reached your bank has to equal the movement in every other account — fees, tax, refunds, holds, timing. Each line is measured with its own query, and the result only stands if nothing is left over.",
@@ -68,7 +68,7 @@ export const TOOLS: Tool[] = [
     does: "Find payouts the gateway sent that never reached your bank.",
     category: "Reconcile",
     icon: "search",
-    slots: [REPORT, { ...STATEMENT, help: `${STATEMENT.help} Adding it lets this confirm against your bank rather than the gateway's record.` }],
+    slots: [REPORT, { ...STATEMENT, required: true, help: `${STATEMENT.help} A payout only counts as missing when it is absent from this statement.` }],
     about:
       "A payout is marked missing when the gateway recorded it as executed and no bank credit can be linked to its UTR more than three working days later. Payouts still inside that window are counted as in transit, not lost.",
     agents: [

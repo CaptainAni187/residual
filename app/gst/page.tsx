@@ -5,6 +5,7 @@ import { AgentPanel } from "@/components/AgentPanel";
 import { CountUp } from "@/components/CountUp";
 import { FileSlot, type SlotProblem } from "@/components/FileSlot";
 import { Assumed } from "@/components/Report";
+import { type Loaded, SamplePicker } from "@/components/SamplePicker";
 import { Stages } from "@/components/Stages";
 import { ToolShell } from "@/components/ToolShell";
 import { ApiError, type GstOut, checkGst, rupees } from "@/lib/api";
@@ -20,18 +21,21 @@ export default function GstTool() {
   const [problems, setProblems] = useState<Record<string, SlotProblem>>({});
   const [general, setGeneral] = useState<ApiError | null>(null);
 
-  const run = async () => {
-    const missing = tool.slots.filter((s) => s.required && !files[s.id]);
-    if (missing.length) {
+  const run = async (given?: Loaded) => {
+    const recon = given?.files.recon ?? files.recon;
+    const gstr2b = given?.files.gstr2b ?? files.gstr2b;
+    if (!recon || !gstr2b) {
+      const missing = tool.slots.filter((s) => s.required && !files[s.id]);
       setProblems(Object.fromEntries(missing.map((s) => [s.id, { message: `Add your ${s.label} to continue.` }])));
       return;
     }
+    if (given) Object.entries(given.files).forEach(([id, f]) => put(id, f));
     setPhase("running");
     setFailed(false);
     setGeneral(null);
     setProblems({});
     try {
-      setOut(await checkGst(files.recon!, files.gstr2b!));
+      setOut(await checkGst(recon, gstr2b));
       setPhase("done");
     } catch (problem) {
       setFailed(true);
@@ -60,9 +64,10 @@ export default function GstTool() {
           {phase === "running" ? (
             <Stages steps={["Reading your report", "Reading GSTR-2B", "Matching tax paid to credit available", "Checking supplier GSTINs"]} done={false} failed={failed} />
           ) : (
-            <div className="cta-row"><button className="btn btn-lg" onClick={run}>Check my credit</button></div>
+            <div className="cta-row"><button className="btn btn-lg" onClick={() => run()}>Check my credit</button></div>
           )}
           {general && <div className="banner" role="alert"><b>{general.message}</b><span>{general.fix}</span></div>}
+          <SamplePicker tool="gst" slots={["recon", "gstr2b"]} onRun={run} disabled={phase === "running"} />
         </div>
       )}
 

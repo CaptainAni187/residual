@@ -9,8 +9,9 @@ import { CountUp } from "@/components/CountUp";
 import { FileSlot, type SlotProblem } from "@/components/FileSlot";
 import { Info } from "@/components/Info";
 import { Assumed } from "@/components/Report";
+import { type Loaded, SamplePicker } from "@/components/SamplePicker";
 import { Stages } from "@/components/Stages";
-import { ApiError, type CloseResult, type Quarter, closeUpload, demoClose, quarter, rupees } from "@/lib/api";
+import { ApiError, type CloseResult, type Quarter, closeUpload, quarter, rupees } from "@/lib/api";
 import { useFiles } from "@/lib/files";
 import { RATES_HELP, bySlug } from "@/lib/tools";
 
@@ -133,9 +134,17 @@ export default function Dashboard() {
     }
   };
 
+  const sample = (l: Loaded) => {
+    Object.entries(l.files).forEach(([id, f]) => put(id, f));
+    setRates(l.rates);
+    setPassword(l.password);
+    run(() => closeUpload(l.files.recon, l.files.statement ?? null, l.rates, l.password));
+  };
+
   const submit = () => {
-    if (!files.recon) {
-      setProblems({ recon: { message: "Add your Razorpay report to continue." } });
+    const missing = slots.filter((s) => s.required && !files[s.id]);
+    if (missing.length) {
+      setProblems(Object.fromEntries(missing.map((s) => [s.id, { message: `Add your ${s.label} to continue.` }])));
       return;
     }
     run(() => closeUpload(files.recon!, files.statement ?? null, rates, password));
@@ -193,10 +202,10 @@ export default function Dashboard() {
           ) : (
             <div className="cta-row">
               <button className="btn btn-lg" onClick={submit}>Build my dashboard</button>
-              <button className="btn btn-ghost" onClick={() => run(demoClose)}>Try with sample data</button>
             </div>
           )}
           {general && <div className="banner" role="alert"><b>{general.message}</b><span>{general.fix}</span></div>}
+          <SamplePicker tool="dashboard" slots={slots.map((s) => s.id)} onRun={sample} disabled={phase === "running"} />
         </div>
       )}
 

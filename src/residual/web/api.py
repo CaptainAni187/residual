@@ -285,7 +285,7 @@ def _assumptions(session: Session, close: Close) -> list[str]:
     elif session.statement_rows:
         out.append(f"Cash landed is read from your bank statement, {session.statement_rows} rows. It prints no running balance, so it could not be checked against itself — treat it as given.")
     else:
-        out.append("No bank statement was given, so cash landed is taken from the gateway's own record of what it paid out. Add a statement to check that against your bank.")
+        out.append("No bank statement was given, so nothing here is checked against your bank. Payouts are not marked missing without one — use Settlement Reconciler or Missing Payout Finder with a statement for that.")
     if session.rows_in and session.rows_used < session.rows_in:
         out.append(f"{session.rows_in - session.rows_used} of {session.rows_in} rows were not in a form this could map, and were left out rather than guessed at.")
     if close.unresolved:
@@ -380,6 +380,13 @@ async def close_upload(
         source = f"{source} + {statement.filename}"
         statement_rows = len(parsed.rows)
         statement_verified = parsed.reconciles
+        banked = bank.to_events(parsed)
+        if not any(e.type == "bank_credit_received" for e in banked):
+            raise problem(
+                422, "no_credits", f"{statement.filename} has no money coming in.",
+                "Upload the statement for the account your payouts land in.", "statement",
+            )
+        events = sorted(banked + events, key=lambda e: (e.occurred_at, e.event_id))
         if not parsed.reconciles and parsed.balance_checked:
             raise problem(
                 422, "balance_mismatch",

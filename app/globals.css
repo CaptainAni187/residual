@@ -465,3 +465,18 @@ pre.sql { margin: 8px 0 0; padding: 11px 13px; background: var(--paper); border:
   .report .rp-total td { font-weight: 700; border-top: 1.5px solid #111; }
   .rp-small li { font-size: 9pt; color: #444; }
 }
+
+/* Samples */
+.samples { margin-top: 22px; padding-top: 18px; border-top: 1px dashed var(--line-firm); }
+.samples-head { display: flex; align-items: center; gap: 6px; font-size: 14px; margin-bottom: 12px; }
+.sample-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.sample { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--sunken); transition: border-color .15s, transform .15s var(--ease); }
+.sample:hover { border-color: var(--line-firm); transform: translateY(-1px); }
+.sample b { font-size: 13.5px; }
+.sample p { margin: 0; font-size: 12.5px; color: var(--ink-2); flex: 1; }
+.sample-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.sample-file { font-size: 12px; color: var(--accent); text-decoration: none; padding: 2px 8px; border-radius: 6px;
+  background: var(--accent-soft); }
+.sample-file:hover { text-decoration: underline; }
+.sample .btn { align-self: flex-start; margin-top: 4px; }

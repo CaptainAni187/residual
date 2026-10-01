@@ -239,7 +239,6 @@ export function closeUpload(recon: File, statement: File | null, contract: strin
   return send<CloseResult>("/api/close", { method: "POST", body: form });
 }
 
-export const demoClose = () => send<CloseResult>("/api/demo", { method: "POST" });
 
 export function readStatement(file: File, password = "") {
   const form = new FormData();

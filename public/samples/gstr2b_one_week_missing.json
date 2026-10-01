@@ -1,0 +1,48 @@
+{
+ "data": {
+  "rtnprd": "032026",
+  "gstin": "29AACCA1234M1ZX",
+  "docdata": {
+   "b2b": [
+    {
+     "ctin": "29AAGCR4375J1ZU",
+     "trdnm": "RAZORPAY SOFTWARE PRIVATE LIMITED",
+     "inv": [
+      {
+       "inum": "RZP/2526/03/11000",
+       "dt": "08-03-2026",
+       "val": "1014.03",
+       "itms": [
+        {
+         "itm_det": {
+          "txval": "859.34",
+          "cgst": "77.34",
+          "sgst": "77.35",
+          "igst": "0.00",
+          "cess": "0.00"
+         }
+        }
+       ]
+      },
+      {
+       "inum": "RZP/2526/03/11001",
+       "dt": "15-03-2026",
+       "val": "1540.16",
+       "itms": [
+        {
+         "itm_det": {
+          "txval": "1305.22",
+          "cgst": "117.47",
+          "sgst": "117.47",
+          "igst": "0.00",
+          "cess": "0.00"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

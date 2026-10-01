@@ -9,6 +9,7 @@ import { CountUp } from "@/components/CountUp";
 import { FileSlot, type SlotProblem } from "@/components/FileSlot";
 import { Info } from "@/components/Info";
 import { Assumed, Verdict, WhatWentIn } from "@/components/Report";
+import { type Loaded, SamplePicker } from "@/components/SamplePicker";
 import { Stages } from "@/components/Stages";
 import { ToolShell } from "@/components/ToolShell";
 import {
@@ -17,7 +18,6 @@ import {
   type Explanation,
   type Finding,
   closeUpload,
-  demoClose,
   explainCause,
   rupees,
 } from "@/lib/api";
@@ -128,6 +128,13 @@ export function ReconTool({ mode }: { mode: Mode }) {
     run(() => closeUpload(files.recon!, tool.slots.some((s) => s.id === "statement") ? files.statement ?? null : null, rates, password));
   };
 
+  const sample = (l: Loaded) => {
+    Object.entries(l.files).forEach(([id, f]) => put(id, f));
+    setRates(l.rates);
+    setPassword(l.password);
+    run(() => closeUpload(l.files.recon, l.files.statement ?? null, l.rates, l.password));
+  };
+
   const pick = async (finding: Finding) => {
     const next = open === finding.cause ? null : finding.cause;
     setOpen(next);
@@ -206,7 +213,6 @@ export function ReconTool({ mode }: { mode: Mode }) {
           ) : (
             <div className="cta-row">
               <button className="btn btn-lg" onClick={submit}>{VERB[mode]}</button>
-              <button className="btn btn-ghost" onClick={() => run(demoClose)}>Try with sample data</button>
               {missingRequired.length > 0 && (
                 <span className="hint">Needs: {missingRequired.map((s) => s.label).join(", ")}</span>
               )}
@@ -220,6 +226,7 @@ export function ReconTool({ mode }: { mode: Mode }) {
               <button className="btn btn-sm btn-ghost" onClick={submit}>Try again</button>
             </div>
           )}
+          <SamplePicker tool={mode} slots={tool.slots.map((s) => s.id)} onRun={sample} disabled={phase === "running"} />
         </div>
       )}
 

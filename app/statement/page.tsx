@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { FileSlot, type SlotProblem } from "@/components/FileSlot";
 import { Assumed } from "@/components/Report";
+import { type Loaded, SamplePicker } from "@/components/SamplePicker";
 import { Stages } from "@/components/Stages";
 import { ToolShell } from "@/components/ToolShell";
 import { ApiError, type StatementOut, readStatement, rupees } from "@/lib/api";
@@ -22,14 +23,16 @@ export default function StatementTool() {
   const [problem, setProblem] = useState<SlotProblem>(null);
   const [filter, setFilter] = useState<"all" | "in" | "out">("all");
 
-  const run = async () => {
-    const file = files.statement;
+  const run = async (given?: Loaded) => {
+    const file = given?.files.statement ?? files.statement;
+    const pass = given ? given.password : password;
     if (!file) { setProblem({ message: "Add your bank statement to continue." }); return; }
+    if (given) { put("statement", file); setPassword(pass); }
     setPhase("running");
     setFailed(false);
     setProblem(null);
     try {
-      setOut(await readStatement(file, password));
+      setOut(await readStatement(file, pass));
       setPhase("done");
       setAskPassword(false);
     } catch (err) {
@@ -59,8 +62,9 @@ export default function StatementTool() {
           {phase === "running" ? (
             <Stages steps={["Opening the file", "Detecting the layout", "Reading transactions", "Checking every running balance"]} done={false} failed={failed} />
           ) : (
-            <div className="cta-row"><button className="btn btn-lg" onClick={run}>{askPassword ? "Unlock and read" : "Read statement"}</button></div>
+            <div className="cta-row"><button className="btn btn-lg" onClick={() => run()}>{askPassword ? "Unlock and read" : "Read statement"}</button></div>
           )}
+          <SamplePicker tool="statement" slots={["statement"]} onRun={run} disabled={phase === "running"} />
         </div>
       )}
 

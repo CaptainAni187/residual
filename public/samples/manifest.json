@@ -1,0 +1,136 @@
+{
+ "rates": "card=2.00,upi=0,netbanking=2.00,wallet=2.00,emi=2.00",
+ "sets": {
+  "clean": {
+   "title": "Clean three weeks",
+   "story": "Every payout arrives and every fee matches the contract.",
+   "files": {
+    "recon": "razorpay_report_clean.json",
+    "statement": "bank_statement_clean.csv"
+   }
+  },
+  "missing": {
+   "title": "A payout goes missing",
+   "story": "One payout is sent by the gateway but never reaches the bank.",
+   "files": {
+    "recon": "razorpay_report_missing.json",
+    "statement": "bank_statement_missing.csv"
+   }
+  },
+  "overcharged": {
+   "title": "Card fees above contract",
+   "story": "Card payments are billed at 2.36% against a 2.00% contract.",
+   "files": {
+    "recon": "razorpay_report_overcharged.json",
+    "statement": "bank_statement_overcharged.csv"
+   }
+  },
+  "gst_all": {
+   "title": "All credit claimable",
+   "story": "Every rupee of GST on fees shows up in GSTR-2B.",
+   "files": {
+    "recon": "razorpay_report_clean.json",
+    "gstr2b": "gstr2b_all_claimable.json"
+   }
+  },
+  "gst_week": {
+   "title": "A week of invoices missing",
+   "story": "The gateway has not filed the last week's invoice yet.",
+   "files": {
+    "recon": "razorpay_report_clean.json",
+    "gstr2b": "gstr2b_one_week_missing.json"
+   }
+  },
+  "gst_bad": {
+   "title": "A supplier with a bad GSTIN",
+   "story": "Gateway credit is fine, but a \u20b91,800 vendor invoice carries a GSTIN that does not validate.",
+   "files": {
+    "recon": "razorpay_report_clean.json",
+    "gstr2b": "gstr2b_bad_supplier.json"
+   }
+  },
+  "st_hdfc": {
+   "title": "HDFC, CSV",
+   "story": "Three weeks of payouts, rent and vendor payments.",
+   "files": {
+    "statement": "bank_statement_clean.csv"
+   }
+  },
+  "st_icici": {
+   "title": "ICICI, CSV",
+   "story": "A different bank's column layout.",
+   "files": {
+    "statement": "statement_icici.csv"
+   }
+  },
+  "st_sbi": {
+   "title": "SBI, CSV",
+   "story": "SBI's layout, with a Debit and Credit column.",
+   "files": {
+    "statement": "statement_sbi.csv"
+   }
+  },
+  "st_axis": {
+   "title": "Axis, CSV",
+   "story": "Axis prints DR/CR beside one amount column.",
+   "files": {
+    "statement": "statement_axis.csv"
+   }
+  },
+  "st_pdf": {
+   "title": "HDFC, PDF",
+   "story": "A PDF statement, layout detected automatically.",
+   "files": {
+    "statement": "statement_hdfc.pdf"
+   }
+  },
+  "st_locked": {
+   "title": "Password-protected PDF",
+   "story": "Locked like a real bank statement. Password: HDFC1234",
+   "files": {
+    "statement": "statement_hdfc_locked.pdf"
+   },
+   "password": "HDFC1234"
+  }
+ },
+ "tools": {
+  "reconcile": [
+   "clean",
+   "missing",
+   "overcharged"
+  ],
+  "missing": [
+   "clean",
+   "missing",
+   "overcharged"
+  ],
+  "fees": [
+   "clean",
+   "missing",
+   "overcharged"
+  ],
+  "dashboard": [
+   "clean",
+   "missing",
+   "overcharged"
+  ],
+  "ask": [
+   "clean",
+   "missing",
+   "overcharged"
+  ],
+  "gst": [
+   "gst_all",
+   "gst_week",
+   "gst_bad"
+  ],
+  "statement": [
+   "st_hdfc",
+   "st_icici",
+   "st_sbi",
+   "st_axis",
+   "st_pdf",
+   "st_locked"
+  ]
+ }
+}
