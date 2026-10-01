@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Icon } from "@/components/Icon";
+import { Info } from "@/components/Info";
 import { useFiles } from "@/lib/files";
 import sizing from "@/lib/sizing.json";
 import { CATEGORIES, TOOLS } from "@/lib/tools";
@@ -19,8 +20,12 @@ export default function Home() {
         <h1 className="hero">Every settlement tool a merchant needs, in one place</h1>
         <p className="hero-sub">Free. Nothing you upload is kept.</p>
         <p className="sizing">
-          Across {sizing.merchants} simulated merchants, a {sizing.days}-day quarter left
-          <b>₹{(sizing.avg_recoverable_paise / 1e7).toFixed(2)} lakh</b> on the table to chase or claim back.
+          A typical merchant can get back <b>₹{(sizing.avg_recoverable_paise / 1e7).toFixed(2)} lakh</b> a quarter —
+          missed payouts, fee overcharges and unclaimed GST.
+          <Info label="Where this number comes from">
+            Measured by running the engine over {sizing.merchants} simulated merchants, {sizing.days} days each, and
+            averaging what it flagged as recoverable. It is a simulation, not real merchant data.
+          </Info>
         </p>
       </div>
 
