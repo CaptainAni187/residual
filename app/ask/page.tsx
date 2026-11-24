@@ -6,6 +6,7 @@ import { SamplePicker } from "@/components/SamplePicker";
 import { Stages } from "@/components/Stages";
 import { ToolShell } from "@/components/ToolShell";
 import { ApiError, type Answer, type CloseResult, askQuestion, closeUpload } from "@/lib/api";
+import { downloadCsv } from "@/lib/download";
 import { useFiles } from "@/lib/files";
 import { bySlug } from "@/lib/tools";
 
@@ -142,12 +143,26 @@ export default function AskTool() {
                     {turn.a.rows.length > 0 ? (
                       <div className="wide">
                         <table className="data compact">
-                          <thead><tr>{turn.a.columns.map((c) => <th key={c}>{c.replace(/_/g, " ")}</th>)}</tr></thead>
+                          <thead><tr>{turn.a.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
                           <tbody>{turn.a.rows.map((row, r) => <tr key={r}>{row.map((cell, c) => <td key={c} className="r">{cell}</td>)}</tr>)}</tbody>
                         </table>
                       </div>
                     ) : (
                       <p className="said" style={{ margin: 0 }}>{turn.a.note || "Nothing in your data matched that."}</p>
+                    )}
+                    {turn.a.rows.length > 0 && (
+                      <button
+                        className="btn btn-sm btn-ghost csv-btn"
+                        onClick={() =>
+                          downloadCsv(
+                            `answer_${i + 1}.csv`,
+                            turn.a!.columns,
+                            turn.a!.rows.map((row) => row.map((c) => (/^-?₹[\d,]+\.\d{2}$/.test(c) ? c.replace(/[₹,]/g, "") : c))),
+                          )
+                        }
+                      >
+                        Download CSV
+                      </button>
                     )}
                     {turn.a.sql && (
                       <details className="sql-wrap">

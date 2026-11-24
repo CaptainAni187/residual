@@ -113,7 +113,7 @@ def test_every_catalogue_query_runs(wh) -> None:
 def test_an_unknown_question_says_so(wh) -> None:
     answer = ask(wh, "what is the airspeed velocity of an unladen swallow")
     assert not answer.ok
-    assert "no catalogue entry matches" in answer.refused
+    assert "needs the AI model" in answer.refused
 
 
 def test_an_injection_in_the_question_is_not_executed(wh) -> None:
@@ -124,9 +124,9 @@ def test_an_injection_in_the_question_is_not_executed(wh) -> None:
 
 
 def test_money_is_formatted_by_column_not_by_size() -> None:
-    assert render(214900, "fee_paise") == "INR 2,149.00"
+    assert render(214900, "fee_paise") == "₹2,149.00"
     assert render(2149, "captures") == "2149"
-    assert render(2149, "amount_paise") == "INR 21.49"
+    assert render(2149, "amount_paise") == "₹21.49"
 
 
 def test_the_query_always_travels_with_the_answer(wh) -> None:
@@ -283,3 +283,16 @@ def test_catalogue_words_match_whole_words_only():
 
     assert from_catalogue("what is the latest payout?") is None or "T+2" not in from_catalogue("what is the latest payout?")[0]
     assert from_catalogue("how much did I refund?") is not None
+
+
+def test_columns_read_like_words_not_database_names():
+    from residual.explain.qa import heading
+
+    assert heading("amount_paise") == "Amount"
+    assert heading("total_revenue_paise") == "Total revenue"
+    assert heading("settled_on") == "Settled on"
+
+
+def test_common_questions_are_answered_without_a_model(wh):
+    for question in ("what is my average order value?", "total sales", "payments by day"):
+        assert ask(wh, question).ok, question

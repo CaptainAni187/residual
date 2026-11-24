@@ -69,3 +69,23 @@ def test_the_landing_page_number_is_still_true():
     from residual.eval.sizing import OUT, measure
 
     assert json.loads(Path(OUT).read_text()) == measure()
+
+
+def test_the_gst_claim_turns_urgent_as_its_deadline_nears():
+    from datetime import date
+
+    from residual.domain.causes import Cause
+    from residual.explain.close import Finding
+    from residual.explain.hypotheses import Evidence
+    from residual.explain.insights import _action
+    from residual.ledger.money import Money
+
+    finding = Finding(Cause.GST_ON_FEE, "GST", Money(65490), Evidence(True, Money(65490), "SELECT 1"))
+    start, end = date(2026, 3, 2), date(2026, 3, 22)
+    far = _action(finding, start, end, today=date(2026, 6, 1))
+    near = _action(finding, start, end, today=date(2026, 11, 24))
+    gone = _action(finding, start, end, today=date(2026, 12, 2))
+    assert far.urgency == "low" and near.urgency == "high"
+    assert "6 days left" in near.deadline
+    assert "closed" in gone.deadline
+    assert not near.draft, "there is no email to send until GSTR-2B has been checked"

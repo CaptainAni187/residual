@@ -168,3 +168,41 @@ def test_the_published_samples_match_the_generator(tmp_path, monkeypatch):
     assert made == sorted(p.name for p in SAMPLES.iterdir())
     for name in made:
         assert (tmp_path / "samples" / name).read_bytes() == (SAMPLES / name).read_bytes(), name
+
+
+def test_the_gst_portal_excel_download_reads_like_the_json(client):
+    """The portal's workbook: title rows, a B2B sheet and a header split over two rows."""
+    import io as _io
+
+    import openpyxl
+
+    data = json.loads((SAMPLES / "gstr2b_one_week_missing.json").read_text())["data"]["docdata"]["b2b"]
+    book = openpyxl.Workbook()
+    book.active.title = "Read me"
+    sheet = book.create_sheet("B2B")
+    sheet.append(["Goods and Services Tax - GSTR-2B"])
+    sheet.append([])
+    sheet.append(["GSTIN of supplier", "Trade/Legal name", "Invoice details", "", "", "", "Place of supply",
+                  "Supply Attract Reverse Charge", "Taxable Value (₹)", "Tax Amount", "", "", ""])
+    sheet.append(["", "", "Invoice number", "Invoice type", "Invoice Date", "Invoice Value(₹)", "", "", "",
+                  "Integrated Tax(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Cess(₹)"])
+    for supplier in data:
+        for inv in supplier["inv"]:
+            det = inv["itms"][0]["itm_det"]
+            sheet.append([supplier["ctin"], supplier["trdnm"], inv["inum"], "Regular", inv["dt"], float(inv["val"]),
+                          "Karnataka", "N", float(det["txval"]), float(det["igst"]), float(det["cgst"]),
+                          float(det["sgst"]), float(det["cess"])])
+    blob = _io.BytesIO()
+    book.save(blob)
+    recon = upload("recon", MANIFEST["sets"]["gst_week"]["files"]["recon"])
+    from_xlsx = client.post("/api/gst", files=dict([recon, ("gstr2b", ("2b.xlsx", blob.getvalue(), "application/octet-stream"))])).json()
+    assert from_xlsx["at_risk_paise"] == gst(client, "gst_week")["at_risk_paise"] > 0
+
+
+def test_the_gst_email_only_asks_the_gateway_about_its_own_invoices(client):
+    week = gst(client, "gst_week")
+    draft = client.post("/api/draft", json={"token": week["token"], "kind": "gst_followup"}).json()
+    assert "₹153.11" in draft["body"] or "INR 153.11" in draft["body"]
+    bad = gst(client, "gst_bad")
+    reply = client.post("/api/draft", json={"token": bad["token"], "kind": "gst_followup"})
+    assert reply.status_code == 409, "a vendor's bad GSTIN is not the gateway's to fix"

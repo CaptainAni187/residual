@@ -21,6 +21,7 @@ import {
   explainCause,
   rupees,
 } from "@/lib/api";
+import { downloadCsv, rupeesCell, stem } from "@/lib/download";
 import { useFiles } from "@/lib/files";
 import { RATES_HELP, bySlug } from "@/lib/tools";
 
@@ -253,6 +254,23 @@ export function ReconTool({ mode }: { mode: Mode }) {
               <div className="table-cap">
                 <b>Where it went</b>
                 <span className="sub">Click any line for a plain-English explanation and the query behind it.</span>
+                <button
+                  className="btn btn-sm btn-ghost"
+                  onClick={() =>
+                    downloadCsv(
+                      `${stem(result.inputs.files[0] ?? "result")}_${mode}.csv`,
+                      ["Line", "Amount (INR)", "Needs attention", "References", "Detail"],
+                      [
+                        ...rows.map((f) => [f.title, rupeesCell(f.amount_paise), f.alarming ? "Yes" : "No", f.refs.join(" "), f.note.replace(/ -- /g, " — ")]),
+                        ...(mode === "reconcile"
+                          ? [["Difference between captured and banked", rupeesCell(result.gap_paise), "", "", ""], ["Left unexplained", rupeesCell(result.residual_paise), "", "", ""]]
+                          : []),
+                      ],
+                    )
+                  }
+                >
+                  Download CSV
+                </button>
               </div>
               <table className="data">
                 <thead>
@@ -330,7 +348,12 @@ export function ReconTool({ mode }: { mode: Mode }) {
             token={result.token}
             actions={result.insight.actions.filter((a) => !PLAN[mode] || PLAN[mode]!.includes(a.cause))}
           />
-          <AgentPanel token={result.token} actions={tool.agents} />
+          <AgentPanel
+            token={result.token}
+            actions={tool.agents.filter(
+              (a) => a.kind !== "second_opinion" || !a.cause || result.findings.some((f) => f.cause === a.cause && f.amount_paise > 0),
+            )}
+          />
           <Assumed assumptions={result.assumptions} />
 
           {(

@@ -41,10 +41,23 @@ class Answer:
         return not self.refused
 
 
+_METHODS = {"card": "Card", "upi": "UPI", "netbanking": "Net banking", "wallet": "Wallet", "emi": "EMI"}
+
+
 def render(value: Any, column: str = "") -> str:
-    if isinstance(value, int) and not isinstance(value, bool) and _is_money(column):
-        return str(Money(value))
-    return str(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and _is_money(column):
+        return str(Money(round(value))).replace("-INR ", "-₹").replace("INR ", "₹")
+    if column.lower() == "method" and isinstance(value, str):
+        return _METHODS.get(value, value)
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    return "" if value is None else str(value)
+
+
+def heading(column: str) -> str:
+    """Column names as a person would write them: amount_paise -> Amount."""
+    name = re.sub(r"_?paise$", "", column, flags=re.IGNORECASE) or column
+    return name.replace("_", " ").strip().capitalize()
 
 
 def _is_money(column: str) -> bool:
@@ -105,6 +118,23 @@ def run(wh: Warehouse, sql: str, question: str = "", source: str = "catalogue") 
 NEEDS_BANK = "settlements with no bank credit linked to them"
 
 CATALOGUE: list[tuple[tuple[str, ...], str, str]] = [
+    (
+        ("total", "revenue", "sales", "collected", "captured", "average", "how many payments", "order value"),
+        "payments captured: count, total and average",
+        (
+            "SELECT count(*) AS payments, sum(amount_paise) AS total_paise, "
+            "CAST(round(avg(amount_paise)) AS BIGINT) AS average_paise, "
+            "max(amount_paise) AS largest_paise FROM events WHERE type = 'payment_captured'"
+        ),
+    ),
+    (
+        ("by day", "daily", "per day", "each day", "busiest"),
+        "payments captured each day",
+        (
+            "SELECT occurred_at AS day, count(*) AS payments, sum(amount_paise) AS total_paise "
+            "FROM events WHERE type = 'payment_captured' GROUP BY 1 ORDER BY 1"
+        ),
+    ),
     (
         ("biggest", "largest", "top"),
         "the largest settlements in the period",
@@ -268,9 +298,9 @@ def ask(
             sql="",
             source="catalogue",
             refused=(
-                "no catalogue entry matches, and no model is configured. "
-                "Try asking about settlements, fees, refunds, disputes, "
-                "unmatched credits, holidays or balances."
+                "That question needs the AI model, which isn't available right now. These work "
+                "without it: totals and averages, payments by day, fees by method, refunds, "
+                "biggest payouts, missing payouts, failed payments, disputes and holiday delays."
             ),
         )
     return _ask_model(wh, question, model)

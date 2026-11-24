@@ -12,6 +12,7 @@ import { Assumed } from "@/components/Report";
 import { type Loaded, SamplePicker } from "@/components/SamplePicker";
 import { Stages } from "@/components/Stages";
 import { ApiError, type CloseResult, type Quarter, closeUpload, quarter, rupees } from "@/lib/api";
+import { downloadCsv, rupeesCell, stem } from "@/lib/download";
 import { useFiles } from "@/lib/files";
 import { RATES_HELP, bySlug } from "@/lib/tools";
 
@@ -20,6 +21,7 @@ const BUCKET_WORD: Record<string, string> = {
   tax: "claim on tax",
   timing: "timing",
   cost: "cost of doing business",
+  own: "your own payments",
   lost: "lost",
 };
 
@@ -55,7 +57,7 @@ function Report({ q, closed }: { q: Quarter; closed: CloseResult }) {
         <h2>3. Findings</h2>
         <table>
           <tbody>
-            {["chase", "tax", "lost", "cost", "timing"].map((k) => (
+            {["chase", "tax", "lost", "cost", "own", "timing"].filter((k) => k in q.insight.totals).map((k) => (
               <tr key={k}><td>{q.insight.labels[k]}</td><td className="r">{rupees(q.insight.totals[k] ?? 0)}</td></tr>
             ))}
             <tr className="rp-total"><td>Difference accounted for</td><td className="r">{rupees(q.gap_paise)}</td></tr>
@@ -216,6 +218,24 @@ export default function Dashboard() {
               <span className="sub">{q.source.replace(/, week \d+$/, "")} · {q.covers}</span>
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btn btn-sm" onClick={() => window.print()}>Download report (PDF)</button>
+                <button
+                  className="btn btn-sm btn-ghost"
+                  onClick={() =>
+                    downloadCsv(
+                      `${stem(closed.inputs.files[0] ?? "dashboard")}_weekly.csv`,
+                      ["Week from", "Week to", "Captured (INR)", "Difference (INR)", "Chase the gateway", "Claim on tax",
+                        "Will settle on its own", "Cost of doing business", "Your own payments", "Lost",
+                        "Fee rate billed (%)", "Contract rate (%)", "Fees above contract (INR)"],
+                      q.weeks.map((w) => [
+                        w.start, w.end, rupeesCell(w.gross_paise), rupeesCell(w.gap_paise),
+                        ...["chase", "tax", "timing", "cost", "own", "lost"].map((k) => rupeesCell(w.totals[k] ?? 0)),
+                        (w.fee_rate * 100).toFixed(3), (w.contract_rate * 100).toFixed(3), rupeesCell(w.overcharge_paise),
+                      ]),
+                    )
+                  }
+                >
+                  Download CSV
+                </button>
                 <button className="btn btn-sm btn-ghost" onClick={() => { setPhase("input"); setQ(null); }}>Start over</button>
               </div>
             </div>

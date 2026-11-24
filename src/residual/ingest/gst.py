@@ -129,18 +129,65 @@ def _norm(cell: str) -> str:
 
 
 def parse_csv(text: str) -> Return:
-    rows = list(csv.reader(io.StringIO(text)))
+    return parse_rows(list(csv.reader(io.StringIO(text))))
+
+
+def parse_bytes(blob: bytes, name: str = "the return") -> Return:
+    """GSTR-2B as the portal hands it out: JSON, the Excel workbook, or a CSV saved from it."""
+    from residual.ingest import bank
+
+    head = blob[:8].lstrip()
+    if head.startswith(b"PK\x03\x04"):
+        return parse_rows(_b2b_sheet(blob, name))
+    text = bank.decode(blob)
+    if text.lstrip().startswith(("{", "[")):
+        try:
+            return parse_json(text)
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as exc:
+            raise UnreadableReturn(f"{name} is JSON but not a GSTR-2B download") from exc
+    return parse_csv(text)
+
+
+def _b2b_sheet(blob: bytes, name: str) -> list[list[str]]:
+    import openpyxl
+
+    from residual.ingest.bank import _cell_text
+
+    try:
+        book = openpyxl.load_workbook(io.BytesIO(blob), read_only=True, data_only=True)
+    except Exception as exc:
+        raise UnreadableReturn(f"could not open {name} as an Excel workbook") from exc
+    sheets = [ws for ws in book.worksheets if _norm(ws.title) == "b2b"] or list(book.worksheets)
+    return [[_cell_text(v) for v in row] for ws in sheets for row in ws.iter_rows(values_only=True)]
+
+
+def _roles(row: list[str]) -> dict[str, int]:
+    found: dict[str, int] = {}
+    for col, cell in enumerate(row):
+        key = _norm(cell)
+        for role, words in _COLUMNS.items():
+            if role not in found and key in words:
+                found[role] = col
+    return found
+
+
+def parse_rows(rows: list[list[str]]) -> Return:
     header_at = -1
     mapping: dict[str, int] = {}
     for i, row in enumerate(rows[:30]):
-        found: dict[str, int] = {}
-        for col, cell in enumerate(row):
-            key = _norm(cell)
-            for role, words in _COLUMNS.items():
-                if role not in found and key in words:
-                    found[role] = col
+        found = _roles(row)
         if len(found) > len(mapping):
             header_at, mapping = i, found
+        # The portal's workbook splits its header over two rows ("Invoice details" over
+        # "Invoice number", "Tax amount" over "Integrated Tax"); read them as one.
+        if i + 1 < len(rows):
+            below = rows[i + 1]
+            joined = [
+                (below[k] if k < len(below) and below[k].strip() else cell) for k, cell in enumerate(row)
+            ] + below[len(row):]
+            found = _roles(joined)
+            if len(found) > len(mapping):
+                header_at, mapping = i + 1, found
     if "supplier_gstin" not in mapping or "invoice_no" not in mapping:
         raise UnreadableReturn(
             f"no GSTR-2B header found; best guess had columns {sorted(mapping)}"

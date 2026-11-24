@@ -557,7 +557,7 @@ def ask_question(body: AskIn) -> AskOut:
     elif not answer.rows:
         note = "Nothing in your data matched that."
     return AskOut(
-        question=body.question, sql=answer.sql, source=answer.source, columns=list(answer.columns),
+        question=body.question, sql=answer.sql, source=answer.source, columns=[qa.heading(c) for c in answer.columns],
         rows=[[qa.render(v, c) for v, c in zip(row, answer.columns, strict=False)] for row in answer.rows[:40]],
         note=note,
     )
@@ -638,7 +638,10 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
     session = _session(body.token)
     close = session.close()
 
-    if body.cause == "settlement_never_arrived":
+    flagged = sorted((f for f in close.findings if f.alarming and f.amount.paise), key=lambda f: -abs(f.amount.paise))
+    if body.cause == "settlement_never_arrived" or (
+        not body.cause and close.residual.paise == 0 and flagged and str(flagged[0].cause) == "settlement_never_arrived"
+    ):
         return _search_payouts(session, close)
 
     if close.residual.paise != 0 and not body.cause:
@@ -649,7 +652,12 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
             run = investigate(belt, driver)
             return run, adjudicate(session.warehouse, run.proposal, close)
     else:
-        candidates = [f for f in close.findings if f.amount.paise and not refined_by(f.cause, session.contracted)]
+        # Lines read straight off the bank statement (rent, bank charges) are not worth a second opinion.
+        candidates = [
+            f for f in close.findings
+            if f.amount.paise and not refined_by(f.cause, session.contracted)
+            and (body.cause or str(f.cause) not in ("other_bank_outflow", "bank_charges"))
+        ]
         if body.cause:
             candidates = [f for f in candidates if str(f.cause) == body.cause and _rederivable(session, f.cause)]
         else:
@@ -821,7 +829,7 @@ class GstOut(BaseModel):
 @router.post("/gst", response_model=GstOut)
 async def gst_credit(
     recon: Annotated[UploadFile, File(description="Razorpay recon or payments export")],
-    gstr2b: Annotated[UploadFile, File(description="GSTR-2B, JSON or CSV")],
+    gstr2b: Annotated[UploadFile, File(description="GSTR-2B, JSON, Excel or CSV")],
 ) -> GstOut:
     from residual.explain import tax
     from residual.ingest import gst
@@ -830,11 +838,10 @@ async def gst_credit(
 
     events = _events_from(await _read(recon, "recon"), recon.filename or "the report")
     name = gstr2b.filename or "the GSTR-2B"
-    text = (await _read(gstr2b, "gstr2b")).decode("utf-8-sig", errors="replace")
     try:
-        book = gst.parse_csv(text) if name.lower().endswith(".csv") else gst.parse_json(text)
+        book = gst.parse_bytes(await _read(gstr2b, "gstr2b"), name)
     except gst.UnreadableReturn as exc:
-        raise problem(422, "gst_unreadable", f"Could not read {name}: {exc}.", "Download GSTR-2B from the GST portal as JSON.", "gstr2b") from exc
+        raise problem(422, "gst_unreadable", f"Could not read {name}: {exc}.", "Download GSTR-2B from the GST portal as JSON or Excel.", "gstr2b") from exc
     if not book.invoices:
         raise problem(
             422, "gst_empty", f"{name} has no invoices in it.",

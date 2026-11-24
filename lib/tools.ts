@@ -59,7 +59,7 @@ export const TOOLS: Tool[] = [
     about:
       "Every payment becomes double-entry bookkeeping, so the difference between what you captured and what reached your bank has to equal the movement in every other account — fees, tax, refunds, holds, timing. Each line is measured with its own query, and the result only stands if nothing is left over.",
     agents: [
-      { kind: "second_opinion", label: "Get a second opinion", does: "An agent is told only that the books are short, and has to work out on its own what caused the biggest flagged line." },
+      { kind: "second_opinion", label: "Get a second opinion", does: "An agent re-checks the biggest flagged line on its own: it traces the cause without being told it, or, for a missing payout, searches every credit on your statement for it." },
     ],
   },
   {
@@ -101,14 +101,16 @@ export const TOOLS: Tool[] = [
         id: "gstr2b",
         label: "GSTR-2B",
         required: true,
-        accept: ".json,.csv,application/json,text/csv",
-        formats: "JSON or CSV · up to 4 MB",
-        help: "Your auto-drafted input tax credit statement, downloaded from the GST portal for the same period as the report.",
+        accept: ".json,.xlsx,.csv,application/json,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        formats: "JSON, Excel or CSV · up to 4 MB",
+        help: "Your auto-drafted input tax credit statement, downloaded from the GST portal (JSON or Excel) for the same period as the report.",
       },
     ],
     about:
       "GST on a gateway's fee is only claimable once the gateway has declared that invoice, at which point it appears in your GSTR-2B. This compares the tax you actually paid with what the return makes available, and checks the supplier GSTIN is valid.",
-    agents: [],
+    agents: [
+      { kind: "draft", draft: "gst_followup", label: "Draft the email to the gateway", does: "Asks the gateway to file the invoices missing from your GSTR-2B, with the amount and the invoices that do appear." },
+    ],
   },
   {
     slug: "statement",

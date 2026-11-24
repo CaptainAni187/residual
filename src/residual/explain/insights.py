@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from residual.domain.causes import Cause
 from residual.explain.close import Close, Finding
 
-Bucket = Literal["chase", "tax", "timing", "cost", "lost"]
+Bucket = Literal["chase", "tax", "timing", "cost", "lost", "own"]
 
 BUCKET_LABEL: dict[str, str] = {
     "chase": "Chase the gateway",
@@ -15,6 +16,7 @@ BUCKET_LABEL: dict[str, str] = {
     "timing": "Will settle on its own",
     "cost": "Cost of doing business",
     "lost": "Lost",
+    "own": "Your own payments (rent, suppliers)",
 }
 
 _CHASE = {
@@ -36,6 +38,8 @@ def bucket_of(finding: Finding) -> Bucket:
         return "timing"
     if cause in _LOST:
         return "lost"
+    if cause is Cause.OTHER_BANK_OUTFLOW:
+        return "own"
     return "cost"
 
 
@@ -66,6 +70,7 @@ class Insight:
 
 
 _WEIGHT = {"high": 3, "medium": 2, "low": 1}
+_IST = ZoneInfo("Asia/Kolkata")
 
 
 def _per_year(amount_paise: int, start: date, end: date) -> int:
@@ -74,7 +79,7 @@ def _per_year(amount_paise: int, start: date, end: date) -> int:
 
 
 def _rupees(paise: int) -> str:
-    digits = str(abs(paise) // 100)
+    digits = str((abs(paise) + 50) // 100)
     if len(digits) > 3:
         head, tail = digits[:-3], digits[-3:]
         groups: list[str] = []
@@ -99,7 +104,7 @@ def _fee_detail(note: str) -> str:
     return "; ".join(lines) + "." if lines else "Billed above your contracted rate."
 
 
-def _action(finding: Finding, start: date, end: date) -> Action | None:
+def _action(finding: Finding, start: date, end: date, today: date | None = None) -> Action | None:
     cause = Cause(str(finding.cause))
     amount = finding.amount.paise
     refs = ", ".join(finding.evidence.entity_ids[:3])
@@ -143,11 +148,20 @@ def _action(finding: Finding, start: date, end: date) -> Action | None:
         )
     if cause is Cause.GST_ON_FEE and amount > 0:
         deadline = gst_claim_deadline(start)
+        left = (deadline - (today or datetime.now(tz=_IST).date())).days
+        urgency: Literal["high", "medium", "low"]
+        if left < 0:
+            urgency, when = "low", f"The claim window closed on {deadline:%d %b %Y} (Section 16(4)) — check with your CA"
+        elif left <= 30:
+            urgency, when = "high", f"By {deadline:%d %b %Y} — {left} day{'s' if left != 1 else ''} left (Section 16(4))"
+        else:
+            urgency, when = "low", f"By {deadline:%d %b %Y} (Section 16(4))"
         return Action(
             str(cause), "Claim GST paid on gateway fees",
-            "GST on the gateway's fee is input tax credit — but only once it shows in your GSTR-2B.",
-            amount, "low", "Your CA, in your GST return", f"By {deadline:%d %b %Y} (Section 16(4))",
-            "gst_followup", f"Claim {_rupees(amount)} as input credit", amount * _WEIGHT["low"],
+            "GST on the gateway's fee is input tax credit, once it shows in your GSTR-2B. "
+            "Check that with GST Credit Checker before you claim.",
+            amount, urgency, "Your CA, in your GST return", when,
+            "", f"Claim {_rupees(amount)} as input credit", amount * _WEIGHT[urgency],
         )
     if cause is Cause.TDS_194O and amount > 0:
         return Action(
@@ -166,11 +180,11 @@ def _action(finding: Finding, start: date, end: date) -> Action | None:
     return None
 
 
-def analyse(close: Close, start: date, end: date) -> Insight:
+def analyse(close: Close, start: date, end: date, today: date | None = None) -> Insight:
     totals: dict[str, int] = dict.fromkeys(BUCKET_LABEL, 0)
     for finding in close.findings:
         totals[bucket_of(finding)] += finding.amount.paise
-    actions = [a for f in close.findings if (a := _action(f, start, end)) is not None]
+    actions = [a for f in close.findings if (a := _action(f, start, end, today)) is not None]
     actions.sort(key=lambda a: -a.score)
     recoverable = sum(
         f.amount.paise for f in close.findings

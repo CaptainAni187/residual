@@ -80,7 +80,7 @@ def test_no_risk_is_reported_when_the_supplier_filed_everything(events) -> None:
     )
     risk = gst_input_credit(events, complete, *MARCH)
     assert risk is not None and not risk.material
-    assert risk.action == "nothing to chase"
+    assert risk.action == "Nothing to chase."
 
 
 @pytest.fixture(scope="module")
@@ -109,7 +109,7 @@ def test_tds_fully_reflected_in_26as_is_not_a_risk(withholding) -> None:
     events, start, end, withheld = withholding
     risk = tds_deposited(events, start, end, per_form_26as=withheld)
     assert risk is not None and not risk.material
-    assert risk.action == "nothing to chase"
+    assert risk.action == "Nothing to chase."
 
 
 def test_tds_short_of_26as_is_flagged(withholding) -> None:

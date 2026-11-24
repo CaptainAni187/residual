@@ -12,6 +12,16 @@ from residual.ledger.money import Money, total
 RAZORPAY_GSTIN = "29AAGCR4375J1ZU"
 
 
+def _r(amount: Money) -> str:
+    return str(amount).replace("-INR ", "-₹").replace("INR ", "₹")
+
+
+def _deadline(start: date) -> str:
+    from residual.explain.insights import gst_claim_deadline
+
+    return f"{gst_claim_deadline(start):%d %b %Y}"
+
+
 @dataclass(frozen=True, slots=True)
 class Risk:
 
@@ -49,8 +59,8 @@ def gst_input_credit(
             kind="gst_input_credit",
             title="Input credit on gateway fees is fully available",
             amount=Money.zero(),
-            detail=f"paid {paid}, GSTR-2B shows {available} against {supplier_gstin}",
-            action="nothing to chase",
+            detail=f"You paid {_r(paid)} and GSTR-2B shows {_r(available)} from the gateway ({supplier_gstin}).",
+            action="Nothing to chase.",
             entity_ids=invoices,
         )
 
@@ -59,14 +69,13 @@ def gst_input_credit(
         title="Input credit paid but not available to claim",
         amount=shortfall,
         detail=(
-            f"{paid} of GST was charged on gateway fees in this period, but "
-            f"GSTR-2B shows only {available} against {supplier_gstin}. "
-            f"Under s.16(2)(aa) the difference cannot be claimed until the "
-            f"supplier files it."
+            f"You paid {_r(paid)} in GST on gateway fees this period, but GSTR-2B shows only "
+            f"{_r(available)} from the gateway ({supplier_gstin}). The rest can't be claimed until "
+            f"the gateway files those invoices (Section 16(2)(aa))."
         ),
         action=(
-            "raise the gap with the gateway before the claim window closes; "
-            "it is cash the merchant has already paid out"
+            f"Ask the gateway to file the missing invoices before {_deadline(start)}, when the "
+            f"claim window closes. Until then it is tax you have paid and cannot claim."
         ),
         entity_ids=invoices,
     )
@@ -81,8 +90,13 @@ def unmatched_suppliers(gstr2b: Return, supplier_gstin: str = RAZORPAY_GSTIN) ->
         kind="malformed_gstin",
         title="Credit sitting against a GSTIN that does not validate",
         amount=at_risk,
-        detail=f"{len(bad)} invoice(s) carry a supplier GSTIN that fails the format check",
-        action="confirm the supplier's GSTIN before filing; the credit is not claimable as it stands",
+        detail=(
+            f"{len(bad)} invoice{'s' if len(bad) != 1 else ''} from "
+            f"{', '.join(sorted({i.supplier_name or i.supplier_gstin for i in bad}))} "
+            f"carr{'y' if len(bad) != 1 else 'ies'} a supplier GSTIN that is not valid "
+            f"({', '.join(sorted({i.supplier_gstin for i in bad}))})."
+        ),
+        action="Ask the supplier to confirm their GSTIN and reissue the invoice. The credit can't be claimed as it stands.",
         entity_ids=tuple(i.invoice_no for i in bad),
     )
 
@@ -104,8 +118,8 @@ def tds_deposited(
             kind="tds_194o",
             title="TDS withheld under s.194-O, not yet matched to Form 26AS",
             amount=withheld,
-            detail=f"{withheld} was withheld by the gateway in this period",
-            action="check it appears in Form 26AS before setting it against a liability",
+            detail=f"The gateway withheld {_r(withheld)} as TDS in this period.",
+            action="Check it appears in your Form 26AS before you set it against your income tax.",
         )
 
     gap = withheld - per_form_26as
@@ -114,15 +128,15 @@ def tds_deposited(
             kind="tds_194o",
             title="TDS withheld is fully reflected in Form 26AS",
             amount=Money.zero(),
-            detail=f"withheld {withheld}, 26AS shows {per_form_26as}",
-            action="nothing to chase",
+            detail=f"Withheld {_r(withheld)}; Form 26AS shows {_r(per_form_26as)}.",
+            action="Nothing to chase.",
         )
     return Risk(
         kind="tds_194o",
-        title="TDS withheld but not deposited against the merchant's PAN",
+        title="TDS withheld but not deposited against your PAN",
         amount=gap,
-        detail=f"withheld {withheld}, Form 26AS shows only {per_form_26as}",
-        action="the difference cannot be set against a liability; raise it with the gateway",
+        detail=f"Withheld {_r(withheld)}, but Form 26AS shows only {_r(per_form_26as)}.",
+        action="The difference can't be set against your tax. Ask the gateway to deposit it.",
     )
 
 

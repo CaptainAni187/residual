@@ -8,6 +8,7 @@ import { type Loaded, SamplePicker } from "@/components/SamplePicker";
 import { Stages } from "@/components/Stages";
 import { ToolShell } from "@/components/ToolShell";
 import { ApiError, type StatementOut, readStatement, rupees } from "@/lib/api";
+import { downloadCsv, rupeesCell, stem } from "@/lib/download";
 import { useFiles } from "@/lib/files";
 import { bySlug } from "@/lib/tools";
 
@@ -99,6 +100,18 @@ export default function StatementTool() {
           <div className="panel wide rise">
             <div className="table-cap">
               <b>Transactions</b>
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() =>
+                  downloadCsv(
+                    `${stem(out.source)}_clean.csv`,
+                    ["Date", "Narration", "Reference", "Withdrawal", "Deposit", "Balance"],
+                    out.rows.map((r) => [r.date, r.narration, r.ref, rupeesCell(r.debit_paise || null), rupeesCell(r.credit_paise || null), rupeesCell(r.balance_paise)]),
+                  )
+                }
+              >
+                Download CSV
+              </button>
               <div className="seg" role="tablist">
                 {(["all", "in", "out"] as const).map((f) => (
                   <button key={f} role="tab" aria-selected={filter === f} data-on={filter === f} onClick={() => setFilter(f)}>
@@ -107,16 +120,16 @@ export default function StatementTool() {
                 ))}
               </div>
             </div>
-            <table className="data">
+            <table className="data stmt">
               <thead><tr><th>Date</th><th>Narration</th><th className="r">Out</th><th className="r">In</th><th className="r">Balance</th></tr></thead>
               <tbody>
                 {rows.map((row, i) => (
                   <tr key={i} className="row-in" style={{ animationDelay: `${Math.min(i, 20) * 25}ms` }}>
-                    <td className="mono nowrap">{row.date}</td>
+                    <td className="mono nowrap st-date">{row.date}</td>
                     <td className="narr">{row.narration}</td>
-                    <td className="r">{row.debit_paise ? rupees(row.debit_paise) : "—"}</td>
-                    <td className="r">{row.credit_paise ? rupees(row.credit_paise) : "—"}</td>
-                    <td className="r">{row.balance_paise === null ? "—" : rupees(row.balance_paise)}</td>
+                    <td className={`r st-out ${row.debit_paise ? "" : "nil"}`}>{row.debit_paise ? `−${rupees(row.debit_paise)}` : "—"}</td>
+                    <td className={`r st-in ${row.credit_paise ? "" : "nil"}`}>{row.credit_paise ? `+${rupees(row.credit_paise)}` : "—"}</td>
+                    <td className="r st-bal">{row.balance_paise === null ? "—" : rupees(row.balance_paise)}</td>
                   </tr>
                 ))}
               </tbody>

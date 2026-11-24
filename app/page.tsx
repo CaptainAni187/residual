@@ -16,7 +16,7 @@ export default function Home() {
     <main className="home">
       <div className="hero-wrap rise">
         <h1 className="hero">Every settlement tool a merchant needs, in one place</h1>
-        <p className="hero-sub">Free. Nothing you upload is kept.</p>
+        <p className="hero-sub">Free. Nothing you upload is kept. No files to hand? Every tool has samples you can run or download.</p>
       </div>
 
       <Link href="/dashboard" className="dash-card rise">

@@ -63,8 +63,14 @@ def _where(finding: Finding) -> str:
 
 
 def _by_method(finding: Finding) -> str:
-    note = finding.evidence.note.split("--", 1)[-1]
-    return "\n".join(f"  - {part.strip()}" for part in note.split(", ") if part.strip())
+    from residual.explain.insights import METHOD_NAME
+
+    lines = []
+    for part in finding.evidence.note.split("--", 1)[-1].split(", "):
+        method, _, rest = part.strip().partition(": ")
+        if rest:
+            lines.append(f"  - {METHOD_NAME.get(method, method.title())} payments: {rest}")
+    return "\n".join(lines)
 
 
 def _period(start: date, end: date) -> str:
@@ -134,14 +140,16 @@ def _fee_dispute(close: Close, start: date, end: date) -> tuple[str, str, str, i
 
 
 def _gst_followup(risks: list[Risk], start: date, end: date) -> tuple[str, str, str, int]:
-    items = [r for r in risks if r.amount.paise]
+    # Only the gateway's own invoices are the gateway's to fix; a vendor's bad GSTIN is not.
+    items = [r for r in risks if r.amount.paise and r.kind == "gst_input_credit"]
     if not items:
-        raise NothingToDraft("all GST paid in this period is available to claim")
-    lines = "\n".join(f"  - {r.title}: {r.amount}. {r.action}" for r in items)
+        raise NothingToDraft("the gateway's invoices are all in your GSTR-2B, so there is nothing to ask it for")
+    invoices = ", ".join(i for r in items for i in r.entity_ids) or "none yet"
+    lines = "\n".join(f"  - GST on your fees not yet in our GSTR-2B: {r.amount}" for r in items)
     body = (
         f"Hello,\n\n"
         f"Our GSTR-2B for {_period(start, end)} does not show all the input tax credit we "
-        f"paid on your fees:\n\n{lines}\n\n"
+        f"paid on your fees:\n\n{lines}\n\nInvoices that do appear: {invoices}.\n\n"
         f"Please file or correct the invoices in your GSTR-1 so the credit reaches our "
         f"return before the claim window closes.\n\nThank you."
     )

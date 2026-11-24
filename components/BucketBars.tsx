@@ -1,6 +1,6 @@
 import { rupees } from "@/lib/api";
 
-const ORDER = ["chase", "tax", "lost", "cost", "timing"] as const;
+const ORDER = ["chase", "tax", "lost", "cost", "own", "timing"] as const;
 const ACT = new Set(["chase", "tax"]);
 
 export function BucketBars({ totals, labels, gap }: { totals: Record<string, number>; labels: Record<string, string>; gap: number }) {
@@ -9,7 +9,8 @@ export function BucketBars({ totals, labels, gap }: { totals: Record<string, num
     <div className="buckets">
       {ORDER.map((key, i) => {
         const value = totals[key] ?? 0;
-        const share = gap ? Math.round((value / gap) * 100) : 0;
+        const exact = gap ? (value / gap) * 100 : 0;
+        const share = exact > 0 && exact < 1 ? "<1" : Math.round(exact).toString();
         return (
           <div className="bucket row-in" key={key} style={{ animationDelay: `${i * 50}ms` }} title={`${labels[key]}: ${rupees(value)}`}>
             <span className="bucket-name">
