@@ -80,7 +80,7 @@ def test_the_question_box_answers_and_shows_its_query(client) -> None:
 def test_the_question_box_refuses_what_is_not_a_question(client) -> None:
     r = client.get("/ask", params={"q": "DROP TABLE events"})
     assert r.status_code == 200
-    assert "no catalogue entry matches" in r.text
+    assert "only read your data" in r.text
     assert client.get("/?week=8").status_code == 200, "the table survived"
 
 

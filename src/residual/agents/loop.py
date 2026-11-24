@@ -365,6 +365,14 @@ SWAP_ON = frozenset({404, 429, 503})
 ALTERNATES = 2
 
 
+def _tune(provider: str, body: dict[str, Any]) -> None:
+    """Groq's gpt-oss models think at length by default; a short task needs only a little."""
+    if provider == "groq" and "gpt-oss" in str(body.get("model")):
+        body.setdefault("reasoning_effort", "low")
+    else:
+        body.pop("reasoning_effort", None)
+
+
 def post_chat(provider: str, key: str, payload: dict[str, Any], timeout: float) -> tuple[dict[str, Any], str]:
     """POST a chat completion; if the model is gone or throttled and none was pinned, try other live models."""
     import httpx
@@ -372,11 +380,13 @@ def post_chat(provider: str, key: str, payload: dict[str, Any], timeout: float) 
     url = f"{PROVIDERS[provider]['base_url']}/chat/completions"
     headers = {"Authorization": f"Bearer {key}"}
     body = {**payload, "model": payload.get("model") or current_model(provider)}
+    _tune(provider, body)
     reply = httpx.post(url, headers=headers, json=body, timeout=timeout)
     if reply.status_code in SWAP_ON and not override_for(provider):
         tried = {body["model"]}
         for model in [m for m in discover(provider, key) if m not in tried][:ALTERNATES]:
             body["model"] = model
+            _tune(provider, body)
             reply = httpx.post(url, headers=headers, json=body, timeout=timeout)
             if reply.status_code < 400:
                 _LIVE[provider] = model
@@ -407,6 +417,9 @@ class OpenAIDriver:
         self._key = api_key
         self._post = post
         self._messages: list[dict[str, Any]] = []
+        self._queue: list[Action] = []
+        self._awaiting: list[str] = []
+        self._nudged = False
 
     def key(self) -> str:
         key = self._key or os.environ.get(self.env, "")
@@ -434,44 +447,70 @@ class OpenAIDriver:
                     ),
                 },
             ]
-        elif run.steps:
+        elif self._awaiting and run.steps:
+            # Every tool call the model made must be answered, in order, before it is asked again.
             last = run.steps[-1]
             self._messages.append({
                 "role": "tool",
-                "tool_call_id": last.args.get("_call_id", "call"),
+                "tool_call_id": self._awaiting.pop(0),
+                "name": last.tool,
                 "content": json.dumps({"ok": last.ok, "result": _trim(last.result)}, default=str),
             })
 
-        body = {
+        if self._queue:
+            return self._queue.pop(0)
+
+        for _ in range(2):
+            message = self.send(self._body()).get("choices", [{}])[0].get("message", {}) or {}
+            calls = message.get("tool_calls") or []
+            self._messages.append({
+                "role": "assistant",
+                "content": message.get("content") or "",
+                **({"tool_calls": calls} if calls else {}),
+            })
+
+            for call in calls:
+                fn = call.get("function", {})
+                raw = fn.get("arguments") or "{}"
+                try:
+                    args = raw if isinstance(raw, dict) else json.loads(raw)
+                except json.JSONDecodeError:
+                    args = {}
+                name = str(fn.get("name"))
+                if name == FINISH.name:
+                    self._queue, self._awaiting = [], []
+                    return (name, cast(dict[str, Any], args))
+                self._queue.append((name, cast(dict[str, Any], args)))
+                self._awaiting.append(str(call.get("id") or f"call_{len(self._messages)}_{len(self._awaiting)}"))
+            if self._queue:
+                return self._queue.pop(0)
+
+            text = re.sub(r"^```(?:json)?|```$", "", message.get("content") or "", flags=re.MULTILINE)
+            try:
+                found = json.loads(text.strip())
+                if isinstance(found, dict) and "sql" in found:
+                    return (FINISH.name, cast(dict[str, Any], found))
+            except json.JSONDecodeError:
+                pass
+            if self._nudged:
+                return None
+            # A model that answers in prose gets one reminder of how to act, rather than ending the run.
+            self._nudged = True
+            self._messages.append({
+                "role": "user",
+                "content": "Use one of the tools to measure something, or call propose with your answer.",
+            })
+        return None
+
+    def _body(self) -> dict[str, Any]:
+        return {
             "model": self.model,
             "messages": self._messages,
             "tools": [
                 {
                     "type": "function",
-                    "function": {
-                        "name": s.name,
-                        "description": s.description,
-                        "parameters": s.schema,
-                    },
+                    "function": {"name": s.name, "description": s.description, "parameters": s.schema},
                 }
                 for s in (*SPECS, FINISH)
             ],
         }
-        message = self.send(body).get("choices", [{}])[0].get("message", {})
-        self._messages.append(message)
-
-        for call in message.get("tool_calls") or []:
-            fn = call.get("function", {})
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                return None
-            if fn.get("name") != FINISH.name:
-                args["_call_id"] = call.get("id", "call")
-            return (str(fn.get("name")), args)
-
-        text = re.sub(r"^```(?:json)?|```$", "", message.get("content") or "", flags=re.MULTILINE)
-        try:
-            return (FINISH.name, cast(dict[str, Any], json.loads(text.strip())))
-        except json.JSONDecodeError:
-            return None

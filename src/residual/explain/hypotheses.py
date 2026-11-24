@@ -157,13 +157,16 @@ class FeeRateChange(Hypothesis):
 
         detail = wh.sql(
             "SELECT method, COUNT(*), "
-            f"SUM(fee_paise - (CASE {cases} ELSE 0 END))/100.0 FROM events "
+            f"CAST(SUM(fee_paise - (CASE {cases} ELSE 0 END)) AS BIGINT) FROM events "
             "WHERE type = 'payment_captured' AND occurred_at BETWEEN ? AND ? "
             f"GROUP BY 1 HAVING SUM(fee_paise - (CASE {cases} ELSE 0 END)) <> 0 "
             "ORDER BY 1",
             [*rate_params, start, end, *rate_params],
         )
-        worst = ", ".join(f"{m}: +INR {d:,.2f} over {n} captures" for m, n, d in detail)
+        worst = ", ".join(
+            f"{m}: {Money(abs(int(d)))} {'overcharged' if d > 0 else 'undercharged'} across {n} payment{'s' if n != 1 else ''}"
+            for m, n, d in detail
+        )
         return Evidence(
             supported=True, amount=amount, sql=wh.rendered(q, params),
             entity_ids=tuple(m for m, _, _ in detail),

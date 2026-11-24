@@ -41,6 +41,13 @@ def why(exc: Exception) -> str:
     return type(exc).__name__
 
 
+def clean(text: str) -> str:
+    """Drop any visible reasoning a model prints before its answer."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"^.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    return re.sub(r"\s+\n", "\n", text).strip()
+
+
 class AllProvidersFailed(RuntimeError):
     pass
 
@@ -82,6 +89,9 @@ class Chat:
             except Exception as exc:  # noqa: BLE001 - any provider failure moves to the next one
                 self.failures.append(f"{provider}: {why(exc)}")
                 continue
+            if not text:
+                self.failures.append(f"{provider}: empty reply")
+                continue
             self.provider = provider
             return text
         raise AllProvidersFailed("; ".join(self.failures))
@@ -104,7 +114,9 @@ class Chat:
             os.environ[spec["env"]],
             {
                 "model": self.model,
-                "max_tokens": max_tokens,
+                # Reasoning models spend part of this budget thinking before they answer;
+                # too small a budget and the visible answer comes back empty.
+                "max_tokens": max(max_tokens * 4, 2048),
                 "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
@@ -113,7 +125,7 @@ class Chat:
             timeout=30,
         )
         text = body.get("choices", [{}])[0].get("message", {}).get("content") or ""
-        return re.sub(r"\s+\n", "\n", str(text)).strip()
+        return clean(str(text))
 
 
 def check_all() -> dict[str, str]:

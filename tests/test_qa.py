@@ -188,15 +188,24 @@ def test_the_catalogue_catches_the_model_when_it_writes_nonsense(wh):
 
 
 def test_hostile_sql_from_the_model_is_refused(wh):
-    answer = ask(wh, "wipe it", speaker=_Speaker("DROP TABLE postings"))
+    answer = ask(wh, "summarise everything", speaker=_Speaker("DROP TABLE postings"))
     assert not answer.ok
-    assert "not a SELECT" in answer.refused
+    assert not answer.rows
+    assert "couldn't" in answer.refused
+
+
+def test_a_request_to_change_data_is_refused_before_any_model_sees_it(wh):
+    speaker = _Speaker("SELECT 1")
+    answer = ask(wh, "delete all my refunds", speaker=speaker)
+    assert not answer.ok
+    assert "only read" in answer.refused
+    assert not speaker.asked
 
 
 def test_an_empty_model_reply_is_refused(wh):
     answer = ask(wh, "something", speaker=_Speaker(""))
     assert not answer.ok
-    assert "returned nothing" in answer.refused
+    assert "couldn't" in answer.refused
 
 
 def test_a_provider_failure_is_reported_not_raised(wh):
@@ -232,3 +241,45 @@ def test_asking_for_five_returns_at_most_five(wh):
     answer = ask(wh, "What were my five biggest payouts?")
     assert answer.ok
     assert len(answer.rows) <= 5
+
+
+class _Sequence(_Speaker):
+    def __init__(self, *replies: str) -> None:
+        super().__init__("")
+        self._replies = list(replies)
+
+    def say(self, system: str, prompt: str, max_tokens: int = 400) -> str:
+        self.asked.append(prompt)
+        return self._replies.pop(0) if self._replies else ""
+
+
+def test_sql_wrapped_in_prose_is_still_run(wh):
+    speaker = _Speaker("Sure! Here it is:\n```sql\nSELECT count(*) AS refunds FROM events WHERE type = 'refund_issued'\n```")
+    answer = ask(wh, "how many refunds?", speaker=speaker)
+    assert answer.ok and answer.rows
+
+
+def test_the_model_repairs_a_query_that_fails(wh):
+    speaker = _Sequence(
+        "SELECT no_such_column FROM events",
+        "SELECT count(*) AS refunds FROM events WHERE type = 'refund_issued'",
+    )
+    answer = ask(wh, "how many refunds were there in total?", speaker=speaker)
+    assert answer.ok and answer.rows
+    assert "corrected" in answer.source
+    assert "no_such_column" in speaker.asked[1], "the second turn should show the model its error"
+
+
+def test_the_model_is_told_the_real_values_in_this_data(wh):
+    speaker = _Speaker("SELECT 1 AS one")
+    ask(wh, "card payments over 5000?", speaker=speaker)
+    assert "Payment methods:" in speaker.asked[0]
+    assert "card" in speaker.asked[0]
+    assert "Dates run from" in speaker.asked[0]
+
+
+def test_catalogue_words_match_whole_words_only():
+    from residual.explain.qa import from_catalogue
+
+    assert from_catalogue("what is the latest payout?") is None or "T+2" not in from_catalogue("what is the latest payout?")[0]
+    assert from_catalogue("how much did I refund?") is not None

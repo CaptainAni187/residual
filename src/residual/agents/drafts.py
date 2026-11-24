@@ -5,7 +5,7 @@ from datetime import date
 from typing import Protocol
 
 from residual.explain.close import Close, Finding
-from residual.explain.grounding import check
+from residual.explain.grounding import check, extract_amounts
 from residual.explain.tax import Risk
 from residual.ledger.money import Money
 
@@ -62,6 +62,11 @@ def _where(finding: Finding) -> str:
     return f" (ref {', '.join(ids)})"
 
 
+def _by_method(finding: Finding) -> str:
+    note = finding.evidence.note.split("--", 1)[-1]
+    return "\n".join(f"  - {part.strip()}" for part in note.split(", ") if part.strip())
+
+
 def _period(start: date, end: date) -> str:
     return f"{start:%d %b %Y} to {end:%d %b %Y}"
 
@@ -116,7 +121,7 @@ def _fee_dispute(close: Close, start: date, end: date) -> tuple[str, str, str, i
     body = (
         f"Hello,\n\n"
         f"For {_period(start, end)}, fees were charged above our contracted rate. "
-        f"The excess is {finding.amount} ({finding.evidence.note}).\n\n"
+        f"The excess is {finding.amount}:\n\n{_by_method(finding)}\n\n"
         f"Please confirm the rate applied, and credit the difference against our next "
         f"settlement.\n\nThank you."
     )
@@ -148,6 +153,8 @@ def _permitted(close: Close | None, risks: list[Risk]) -> list[Money]:
     if close is not None:
         found += [f.amount for f in close.findings]
         found += [close.gap, close.residual, close.variance.gross_captured, close.variance.cash_landed]
+        # Per-method or per-item figures the verifier itself wrote into its notes are verified too.
+        found += [m for f in close.findings for _, m in extract_amounts(f.evidence.note)]
     return found
 
 
@@ -183,13 +190,10 @@ def draft(
     try:
         polished = speaker.say(POLISH, body, max_tokens=500).strip()
     except Exception as exc:  # noqa: BLE001 - a provider failure falls back, never loses the draft
-        return Draft(kind, to, subject, body, "template", f"model unavailable ({type(exc).__name__}); template used", count)
+        return Draft(kind, to, subject, body, "template", f"model unavailable ({exc or type(exc).__name__}); template used", count)
 
     known = _identifiers(close)
-    scrubbed = polished
-    for ident in sorted(known, key=len, reverse=True):
-        scrubbed = scrubbed.replace(ident, "")
-    gate = check(scrubbed, _permitted(close, risks))
+    gate = check(polished, _permitted(close, risks), identifiers=known)
     missing = [i for i in known if i in body and i not in polished]
     if not polished or not gate.ok or missing:
         why = gate.reason() if not gate.ok else (f"dropped {', '.join(missing)}" if missing else "empty reply")

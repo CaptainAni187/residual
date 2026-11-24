@@ -119,7 +119,7 @@ def test_an_explanation_without_a_key_is_written_from_the_verifier(client, token
         "/api/explain", json={"token": token, "cause": "refunds_issued"}
     ).json()
     assert body["source"] == "offline"
-    assert "INR" in body["text"]
+    assert "₹" in body["text"] and "--" not in body["text"]
 
 
 def test_the_providers_endpoint_reports_what_is_configured(client):

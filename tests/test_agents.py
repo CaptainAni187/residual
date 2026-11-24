@@ -334,3 +334,33 @@ def test_garbled_tool_arguments_do_not_crash_the_loop(belt):
     run = investigate(belt, OpenAIDriver(provider="groq", post=post))
     assert run.proposal is None
     assert run.stopped == "gave up"
+
+
+def test_parallel_tool_calls_are_all_run_and_all_answered(belt):
+    from residual.agents.loop import OpenAIDriver
+
+    both = {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
+        {"id": "a", "type": "function", "function": {"name": "unbalanced_accounts", "arguments": "{}"}},
+        {"id": "b", "type": "function", "function": {"name": "fee_at_contracted_rate", "arguments": "{}"}},
+    ]}}]}
+    post = _Poster([both, _openai_reply(FINISH.name, {
+        "name": "gateway_fee", "accounts": ["fee_expense"], "sql": f"SELECT {belt.close.residual.paise}",
+    })])
+    run = investigate(belt, OpenAIDriver(provider="gemini", post=post))
+    assert [s.tool for s in run.steps] == ["unbalanced_accounts", "fee_at_contracted_rate"]
+    answered = [m["tool_call_id"] for m in post.bodies[1]["messages"] if m["role"] == "tool"]
+    assert answered == ["a", "b"], "every call must be answered before the model is asked again"
+    assert all("_call_id" not in s.args for s in run.steps)
+    assert run.proposal is not None
+
+
+def test_a_model_that_answers_in_prose_is_reminded_once(belt):
+    from residual.agents.loop import OpenAIDriver
+
+    post = _Poster([
+        _openai_reply(text="I think it is probably fees."),
+        _openai_reply("unbalanced_accounts", {}),
+    ])
+    run = investigate(belt, OpenAIDriver(provider="groq", post=post), budget=1)
+    assert [s.tool for s in run.steps] == ["unbalanced_accounts"]
+    assert any(m["role"] == "user" and "propose" in m["content"] for m in post.bodies[1]["messages"])

@@ -17,7 +17,10 @@ BUCKET_LABEL: dict[str, str] = {
     "lost": "Lost",
 }
 
-_CHASE = {Cause.SETTLEMENT_NEVER_ARRIVED, Cause.FEE_RATE_INCREASE, Cause.RISK_HOLD, Cause.DISPUTE_RESERVE_HELD}
+_CHASE = {
+    Cause.SETTLEMENT_NEVER_ARRIVED, Cause.FEE_RATE_INCREASE, Cause.RISK_HOLD,
+    Cause.DISPUTE_RESERVE_HELD, Cause.GATEWAY_ADJUSTMENT,
+}
 _TAX = {Cause.GST_ON_FEE, Cause.TDS_194O}
 _TIMING = {Cause.CAPTURED_NOT_YET_SETTLED, Cause.SETTLEMENT_IN_FLIGHT, Cause.BANK_HOLIDAY_DELAY}
 _LOST = {Cause.CHARGEBACK_LOST}
@@ -84,6 +87,18 @@ def _rupees(paise: int) -> str:
     return f"₹{digits}"
 
 
+METHOD_NAME = {"card": "Card", "upi": "UPI", "netbanking": "Net banking", "wallet": "Wallet", "emi": "EMI"}
+
+
+def _fee_detail(note: str) -> str:
+    lines = []
+    for part in note.split("--", 1)[-1].split(", "):
+        method, _, rest = part.strip().partition(": ")
+        if rest:
+            lines.append(f"{METHOD_NAME.get(method, method.title())} payments: {rest.replace('INR ', '₹')}")
+    return "; ".join(lines) + "." if lines else "Billed above your contracted rate."
+
+
 def _action(finding: Finding, start: date, end: date) -> Action | None:
     cause = Cause(str(finding.cause))
     amount = finding.amount.paise
@@ -100,10 +115,17 @@ def _action(finding: Finding, start: date, end: date) -> Action | None:
         yearly = _per_year(amount, start, end)
         return Action(
             str(cause), "Dispute fees charged above your contract",
-            (finding.evidence.note[:1].upper() + finding.evidence.note[1:]).replace("--", "—") + ".",
+            _fee_detail(finding.evidence.note),
             amount, "high", "Your gateway account manager", "Before the next settlement",
             "fee_dispute", f"Recover {_rupees(amount)} now, and stop about {_rupees(yearly)} a year",
             (yearly + amount) * _WEIGHT["high"],
+        )
+    if cause is Cause.GATEWAY_ADJUSTMENT and amount > 0:
+        return Action(
+            str(cause), "Ask what the gateway's adjustment was for",
+            f"The gateway took this out of a payout{f' ({refs})' if refs else ''} without a matching fee or refund.",
+            amount, "medium", "Gateway support team", "This week",
+            "escalate", f"Recover up to {_rupees(amount)}", amount * _WEIGHT["medium"],
         )
     if cause is Cause.RISK_HOLD and amount > 0:
         return Action(
