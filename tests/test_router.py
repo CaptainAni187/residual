@@ -328,3 +328,14 @@ def test_a_model_that_rejects_reasoning_effort_is_asked_again_without_it(monkeyp
     monkeypatch.setattr(loop, "PROVIDERS", {**loop.PROVIDERS, "groq": {**loop.PROVIDERS["groq"], "model": "openai/gpt-oss-120b"}})
     assert chat.Chat().say("s", "p") == "fine"
     assert "reasoning_effort" in sent[0] and "reasoning_effort" not in sent[1]
+
+
+def test_a_request_that_never_returns_is_cut_off_at_the_deadline(monkeypatch):
+    import time as _time
+
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _time.sleep(30))
+    started = _time.monotonic()
+    with pytest.raises(chat.AllProvidersFailed):
+        chat.Chat(budget=4.0).say("s", "p")
+    assert _time.monotonic() - started < 6

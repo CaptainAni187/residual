@@ -4,6 +4,8 @@ import json
 import os
 import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
@@ -382,10 +384,16 @@ def _tune(provider: str, body: dict[str, Any]) -> None:
     """Reasoning models think at length by default; these short tasks need only a little,
     and a long think on a free tier mostly means a timeout."""
     model = str(body.get("model"))
+    if body.get("reasoning_effort", "") is None:
+        body.pop("reasoning_effort")  # this model refused the setting; leave it off
+        return
     if (provider == "groq" and "gpt-oss" in model) or (provider == "gemini" and "2.5" in model):
         body.setdefault("reasoning_effort", "low")
     else:
         body.pop("reasoning_effort", None)
+
+
+_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="model")
 
 
 class OutOfTime(RuntimeError):
@@ -411,15 +419,28 @@ def post_chat(
     headers = {"Authorization": f"Bearer {key}"}
     body = {**payload, "model": payload.get("model") or current_model(provider)}
 
+    def call(sent: dict[str, Any]) -> httpx.Response:
+        # httpx's timeout bounds each read, not the whole request; a slow trickle could outlast
+        # it many times over. The wall clock is enforced here instead.
+        limit = remaining()
+        future = _POOL.submit(httpx.post, url, headers=headers, json=sent, timeout=limit)
+        try:
+            return future.result(timeout=limit)
+        except FutureTimeout as exc:
+            raise httpx.ReadTimeout(f"no answer within {limit:.0f}s") from exc
+
     def send() -> httpx.Response:
         _tune(provider, body)
-        reply = httpx.post(url, headers=headers, json=body, timeout=remaining())
+        try:
+            reply = call(body)
+        except httpx.TimeoutException:
+            # Treat a model that is too slow like one that is overloaded.
+            return httpx.Response(503, request=httpx.Request("POST", url))
         if reply.status_code == 400 and "reasoning_effort" in body:
             # A model that does not take the setting: ask again without it.
-            body["reasoning_effort"] = None
-            sent = {k: v for k, v in body.items() if v is not None}
-            reply = httpx.post(url, headers=headers, json=sent, timeout=remaining())
             body.pop("reasoning_effort", None)
+            reply = call({k: v for k, v in body.items() if k != "reasoning_effort"})
+            body["reasoning_effort"] = None
         return reply
 
     reply = send()

@@ -31,7 +31,7 @@ METHODS = ("card", "upi", "netbanking", "wallet", "emi")
 router = APIRouter(prefix="/api")
 
 # Calls that spend model quota are capped per visitor, so one tab in a loop cannot use up the free tier.
-METER_LIMIT, METER_WINDOW = 30, 600.0
+METER_LIMIT, METER_WINDOW = 60, 600.0
 _HITS: dict[str, deque[float]] = {}
 
 
