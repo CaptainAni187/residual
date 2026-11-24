@@ -346,11 +346,12 @@ def test_the_right_password_opens_a_real_locked_statement(client):
     assert body["ties_to_balance"] is True
 
 
-def test_a_locked_statement_can_be_reconciled_with_its_password(client, recon_blob):
+def test_a_locked_statement_can_be_reconciled_with_its_password(client):
+    march = Path(__file__).resolve().parents[1] / "public" / "samples" / "razorpay_report_clean.json"
     reply = client.post(
         "/api/close",
         files={
-            "recon": ("recon.json", recon_blob, "application/json"),
+            "recon": ("recon.json", march.read_bytes(), "application/json"),
             "statement": ("hdfc_locked.pdf", LOCKED.read_bytes(), "application/pdf"),
         },
         data={"statement_password": LOCKED_PASSWORD},
@@ -390,3 +391,67 @@ def test_every_result_carries_its_action_plan(client):
     body = client.post("/api/demo?seed=20260822&week=8").json()
     assert body["insight"]["recoverable_paise"] > 0
     assert [a["cause"] for a in body["insight"]["actions"]][:2] == ["settlement_never_arrived", "fee_rate_increase"]
+
+
+
+def _march(name: str) -> bytes:
+    return (Path(__file__).resolve().parents[1] / "public" / "samples" / name).read_bytes()
+
+
+def test_a_statement_for_other_dates_is_refused_by_name(client):
+    last_year = _march("bank_statement_missing.csv").decode().replace("/03/26,", "/03/25,")
+    reply = client.post(
+        "/api/close",
+        files={"recon": ("r.json", _march("razorpay_report_missing.json"), "application/json"),
+               "statement": ("old.csv", last_year.encode(), "text/csv")},
+        data={"contract": "card=2.00,upi=0,netbanking=2.00"},
+    )
+    assert _err(reply)["code"] == "statement_period"
+    assert "2025-03" in _err(reply)["message"] and "2026-03" in _err(reply)["message"]
+
+
+def test_a_statement_from_another_account_is_called_out(client):
+    body = client.post(
+        "/api/close",
+        files={"recon": ("r.json", _march("razorpay_report_missing.json"), "application/json"),
+               "statement": ("other.csv", (FIXTURES / "statements" / "hdfc.csv").read_bytes(), "text/csv")},
+        data={"contract": "card=2.00,upi=0,netbanking=2.00"},
+    ).json()
+    assert "None of the" in body["assumptions"][0]
+
+
+def test_without_a_statement_nothing_is_called_missing(client):
+    body = client.post(
+        "/api/close", files={"recon": ("r.json", _march("razorpay_report_missing.json"), "application/json")},
+        data={"contract": "card=2.00,upi=0,netbanking=2.00"},
+    ).json()
+    causes = {f["cause"] for f in body["findings"]}
+    assert "settlement_never_arrived" not in causes
+    assert "settlement_in_flight" in causes
+    assert body["residual_paise"] == 0
+
+
+def test_without_rates_fees_are_taken_as_billed_and_the_books_still_close(client):
+    body = client.post(
+        "/api/close",
+        files={"recon": ("r.json", _march("razorpay_report_missing.json"), "application/json"),
+               "statement": ("s.csv", _march("bank_statement_missing.csv"), "text/csv")},
+    ).json()
+    assert body["residual_paise"] == 0
+    assert any(f["title"] == "Gateway fees, as billed" for f in body["findings"])
+
+
+def test_a_statement_that_stops_early_does_not_invent_missing_payouts(client):
+    lines = _march("bank_statement_missing.csv").decode().splitlines(keepends=True)
+    head = next(i for i, line in enumerate(lines) if line.startswith("Date,"))
+    rows = [line for line in lines[head + 1:] if line[:2].isdigit()]
+    short = "".join(lines[: head + 1] + [r for r in rows if r.split(",")[0] <= "10/03/26"])
+    body = client.post(
+        "/api/close",
+        files={"recon": ("r.json", _march("razorpay_report_missing.json"), "application/json"),
+               "statement": ("s.csv", short.encode(), "text/csv")},
+        data={"contract": "card=2.00,upi=0,netbanking=2.00"},
+    ).json()
+    missing = sum(f["amount_paise"] for f in body["findings"] if f["cause"] == "settlement_never_arrived")
+    assert missing <= 4400831, "only the payout that really is missing may be called missing"
+    assert any("in transit, never as missing" in a for a in body["assumptions"])

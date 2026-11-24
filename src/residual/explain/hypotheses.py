@@ -20,6 +20,7 @@ class Evidence:
     sql: str
     entity_ids: tuple[str, ...] = ()
     note: str = ""
+    title: str = ""
 
     @property
     def material(self) -> bool:
@@ -116,7 +117,17 @@ class GatewayFees(Hypothesis):
 
     def verify(self, wh: Warehouse, start: date, end: date) -> Evidence:
         if not self.contracted:
-            return _no_contract()
+            # No rate card: fees are taken as billed, so the books still close; nothing is checked.
+            q = (
+                "SELECT COALESCE(SUM(fee_paise), 0) FROM events "
+                "WHERE type = 'payment_captured' AND occurred_at BETWEEN ? AND ?"
+            )
+            billed = wh.scalar_money(q, [start, end])
+            return Evidence(
+                supported=billed.paise > 0, amount=billed, sql=wh.rendered(q, [start, end]),
+                note="taken as billed: no contracted rates were given to check them against",
+                title="Gateway fees, as billed",
+            )
         cases, rate_params = _priced_at(self.contracted)
         q = (
             f"SELECT COALESCE(SUM(CASE {cases} ELSE 0 END), 0) FROM events "
@@ -391,7 +402,20 @@ class SettlementNeverArrived(Hypothesis):
         self.stale_after_days = stale_after_days
 
     def verify(self, wh: Warehouse, start: date, end: date) -> Evidence:
-        cutoff = end - timedelta(days=self.stale_after_days)
+        opened, seen = wh.sql(
+            "SELECT min(occurred_at), max(occurred_at) FROM events "
+            "WHERE type IN ('bank_credit_received', 'bank_debit', 'bank_charge_applied')"
+        )[0]
+        if seen is None:
+            # Without a bank statement nothing can be called missing; it stays "sent, not confirmed".
+            return Evidence(False, Money.zero(), "-- no bank statement: a payout cannot be called missing",
+                            note="no bank statement was given, so nothing can be called missing")
+        # Only payouts the statement could show are judged: one executed near or after its last
+        # day may simply not have landed yet.
+        slack = timedelta(days=self.stale_after_days)
+        cutoff = (seen if seen < end - slack else end) - slack
+        if opened > start + slack:
+            start = opened
         q = (
             "SELECT COALESCE(SUM(s.amount_paise), 0), COALESCE(STRING_AGG(s.utr, ',' ORDER BY s.utr), '') "
             "FROM events s "
@@ -417,6 +441,6 @@ class SettlementNeverArrived(Hypothesis):
         return Evidence(
             True, amount, wh.rendered(q, params),
             entity_ids=tuple(u for u in row[1].split(",") if u),
-            note=f"no credit links to these UTRs more than {self.stale_after_days} days "
-                 f"after execution, and no unplaced credit could be them -- escalate",
+            note=f"no bank credit matches these UTRs {self.stale_after_days}+ days after the "
+                 f"gateway paid them out, and no unmatched credit could be them -- escalate",
         )

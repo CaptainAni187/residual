@@ -8,7 +8,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
@@ -320,6 +320,16 @@ class CloseOut(BaseModel):
 
 def _assumptions(session: Session, close: Close) -> list[str]:
     out: list[str] = []
+    if session.statement_rows:
+        paid, linked = session.warehouse.sql(
+            "SELECT (SELECT count(*) FROM events WHERE type = 'settlement_executed'), "
+            "(SELECT count(*) FROM credit_links WHERE settlement_id IS NOT NULL)"
+        )[0]
+        if paid >= 2 and linked == 0:
+            out.append(
+                f"None of the {paid} payouts in the report appear on this bank statement. Check it is the "
+                "statement for the account your payouts land in — otherwise every payout looks missing."
+            )
     if session.contracted:
         rates = ", ".join(f"{m} at {r}%" for m, r in sorted(session.contracted.items()))
         out.append(f"Your contracted rates are {rates}. Fees are priced against these, so a difference shows as charged above contract. Change them if they are wrong.")
@@ -433,6 +443,7 @@ async def close_upload(
     source = recon.filename or "upload"
     statement_rows = 0
     statement_verified = False
+    report_days = sorted(e.occurred_at for e in events)
     if statement is not None and statement.filename:
         parsed = await _read_statement(statement, statement_password)
         source = f"{source} + {statement.filename}"
@@ -452,10 +463,22 @@ async def close_upload(
                 "It may be a partial export or edited. Download it again from net banking.",
                 "statement",
             )
+        first, last = min(r.txn_date for r in parsed.rows), max(r.txn_date for r in parsed.rows)
+        if last < report_days[0] or first > report_days[-1]:
+            raise problem(
+                422, "statement_period",
+                f"{statement.filename} covers {first} to {last}, but the report covers {report_days[0]} to {report_days[-1]}.",
+                "Upload the bank statement for the same dates as the gateway report.", "statement",
+            )
+        if last < report_days[-1] - timedelta(days=3) or first > report_days[0] + timedelta(days=3):
+            notes.append(
+                f"Your statement covers {first} to {last}, but the report runs {report_days[0]} to {report_days[-1]}. "
+                "Payouts the statement could not show are counted as in transit, never as missing."
+            )
 
-    days = sorted(e.occurred_at for e in events)
+    # The period is the report's; a statement that runs longer must not stretch it.
     session = Session(
-        events=events, contracted=rates, start=days[0], end=days[-1], source=source,
+        events=events, contracted=rates, start=report_days[0], end=report_days[-1], source=source,
         kind=tally.get("kind", "settlement report"), rows_in=tally.get("rows_in", 0),
         rows_used=len({getattr(e, "payment_id", e.event_id) for e in events}),
         statement_rows=statement_rows, statement_verified=statement_verified, notes=notes,

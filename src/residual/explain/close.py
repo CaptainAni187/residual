@@ -177,7 +177,7 @@ def run_close(
     findings = [
         Finding(
             cause=cause,
-            title=h.title,
+            title=evidence.title or h.title,
             amount=amounts[cause],
             evidence=evidence,
             alarming=h.alarming or cause in ALARMING,
