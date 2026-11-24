@@ -101,7 +101,7 @@ export type Answer = {
 export type Step = { tool: string; args: Record<string, unknown>; ok: boolean; found: string };
 
 export type Investigation = {
-  mode: "open_residual" | "second_opinion";
+  mode: "open_residual" | "second_opinion" | "payout_search";
   cause: string;
   driver: string;
   short_by: string;

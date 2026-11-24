@@ -17,6 +17,8 @@ const TOOL_WORDS: Record<string, string> = {
   fee_at_contracted_rate: "Priced fees at your contract",
   fee_as_billed: "Read the fees actually billed",
   run_query: "Ran a query",
+  search_reference: "Searched the statement for the reference",
+  search_amount: "Searched for a credit of the same amount",
 };
 
 function Transcript({ run }: { run: Investigation }) {
@@ -48,14 +50,18 @@ function Transcript({ run }: { run: Investigation }) {
       ))}
       {shown > run.steps.length && (
         <div className={`t-verdict ${run.accepted ? "ok" : "no"}`}>
-          {run.accepted
+          {run.mode === "payout_search"
+            ? `${run.accepted ? "Confirmed missing" : "Check before chasing"} — ${run.verdict}`
+            : run.accepted
             ? `Independently confirmed — traced ${run.short_by.replace("INR ", "₹")} to the same cause, without being told what caused it.`
             : `Could not confirm — ${run.verdict}`}
         </div>
       )}
       {shown > run.steps.length && (
         <p className="t-driver">
-          {run.driver === "analyst" ? "Worked by the built-in analyst" : `Driven by ${run.driver}`} · every step checked by the verifier
+          {run.mode === "payout_search"
+            ? "Searched every credit on your statement"
+            : `${run.driver === "analyst" ? "Worked by the built-in analyst" : `Driven by ${run.driver}`} · every step checked by the verifier`}
           {run.notes.length > 0 && <span title={run.notes.join("\n")}> · fell back after {run.notes.length} model{run.notes.length === 1 ? "" : "s"}</span>}
         </p>
       )}

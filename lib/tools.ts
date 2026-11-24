@@ -72,7 +72,7 @@ export const TOOLS: Tool[] = [
     about:
       "A payout is marked missing when the gateway recorded it as executed and no bank credit can be linked to its UTR more than three working days later. Payouts still inside that window are counted as in transit, not lost.",
     agents: [
-      { kind: "second_opinion", cause: "settlement_never_arrived", label: "Double-check it", does: "An agent has to trace the missing amount to its cause on its own, without being told it is a lost payout." },
+      { kind: "second_opinion", cause: "settlement_never_arrived", label: "Search the statement for it", does: "Before calling a payout missing, every credit on your statement is searched for it — by its reference, by the last digits a bank might keep, and by amount." },
     ],
   },
   {

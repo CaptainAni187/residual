@@ -307,8 +307,8 @@ def _version(model: str) -> tuple[int, ...]:
     return tuple(int(n) for n in re.findall(r"\d+", model))
 
 
-def choose(provider: str, catalogue: list[dict[str, Any]]) -> str | None:
-    """Pick a chat model from a provider's /models listing."""
+def ranked(provider: str, catalogue: list[dict[str, Any]]) -> list[str]:
+    """Chat models from a provider's /models listing, best first."""
     ids = []
     for entry in catalogue:
         model = str(entry.get("id") or entry.get("name") or "").removeprefix("models/")
@@ -318,17 +318,31 @@ def choose(provider: str, catalogue: list[dict[str, Any]]) -> str | None:
         if provider == "openrouter" and (not model.endswith(":free") or (params is not None and "tools" not in params)):
             continue
         ids.append(model)
+    out: list[str] = []
     for want in PREFER.get(provider, ("",)):
-        matches = [m for m in ids if want in m.lower()]
-        if matches:
-            return max(matches, key=_version)
-    return None
+        for model in sorted((m for m in ids if want in m.lower()), key=_version, reverse=True):
+            if model not in out:
+                out.append(model)
+    return out
 
 
-def discover(provider: str, key: str) -> str | None:
-    """Ask the provider what it serves today. Any failure means 'no better idea'."""
+def choose(provider: str, catalogue: list[dict[str, Any]]) -> str | None:
+    best = ranked(provider, catalogue)
+    return best[0] if best else None
+
+
+_LISTED: dict[str, tuple[float, list[str]]] = {}
+
+
+def discover(provider: str, key: str) -> list[str]:
+    """Ask the provider what it serves today, best first. Any failure means 'no better idea'."""
+    import time
+
     import httpx
 
+    cached = _LISTED.get(provider)
+    if cached and time.monotonic() - cached[0] < 600:
+        return cached[1]
     try:
         reply = httpx.get(
             f"{PROVIDERS[provider]['base_url']}/models",
@@ -338,26 +352,37 @@ def discover(provider: str, key: str) -> str | None:
         reply.raise_for_status()
         body = reply.json()
     except Exception:  # noqa: BLE001 - discovery is best effort
-        return None
+        return []
     listing = (body.get("data") or body.get("models") or []) if isinstance(body, dict) else []
-    return choose(provider, [e for e in listing if isinstance(e, dict)] if isinstance(listing, list) else [])
+    found = ranked(provider, [e for e in listing if isinstance(e, dict)] if isinstance(listing, list) else [])
+    _LISTED[provider] = (time.monotonic(), found)
+    return found
+
+
+# 404: the model is gone. 429/503: this model is throttled or overloaded; free tiers limit per model,
+# so a sibling model often answers when this one will not.
+SWAP_ON = frozenset({404, 429, 503})
+ALTERNATES = 2
 
 
 def post_chat(provider: str, key: str, payload: dict[str, Any], timeout: float) -> tuple[dict[str, Any], str]:
-    """POST a chat completion; if the model is gone (404) and none was pinned, find a live one and retry once."""
+    """POST a chat completion; if the model is gone or throttled and none was pinned, try other live models."""
     import httpx
 
     url = f"{PROVIDERS[provider]['base_url']}/chat/completions"
     headers = {"Authorization": f"Bearer {key}"}
     body = {**payload, "model": payload.get("model") or current_model(provider)}
     reply = httpx.post(url, headers=headers, json=body, timeout=timeout)
-    if reply.status_code == 404 and not override_for(provider):
-        found = discover(provider, key)
-        if found and found != body["model"]:
-            body["model"] = found
+    if reply.status_code in SWAP_ON and not override_for(provider):
+        tried = {body["model"]}
+        for model in [m for m in discover(provider, key) if m not in tried][:ALTERNATES]:
+            body["model"] = model
             reply = httpx.post(url, headers=headers, json=body, timeout=timeout)
             if reply.status_code < 400:
-                _LIVE[provider] = found
+                _LIVE[provider] = model
+                break
+            if reply.status_code not in SWAP_ON:
+                break
     reply.raise_for_status()
     return cast(dict[str, Any], reply.json()), str(body["model"])
 

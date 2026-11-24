@@ -248,7 +248,7 @@ class OfflineAgent:
         return " ".join(lines), "offline"
 
 
-class ClaudeAgent:
+class AnthropicAgent:
 
     def __init__(
         self, model: str = MODEL, max_turns: int = 24, client: LLMClient | None = None
@@ -345,7 +345,7 @@ def pick_agent() -> Agent:
         import anthropic  # noqa: F401
     except ImportError:
         return OfflineAgent()
-    return ClaudeAgent()
+    return AnthropicAgent()
 
 
 def write_memo(

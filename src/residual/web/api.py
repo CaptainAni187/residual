@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from residual.explain.close import Close, run_close
@@ -25,6 +26,31 @@ SESSION_TTL = 45 * 60
 METHODS = ("card", "upi", "netbanking", "wallet", "emi")
 
 router = APIRouter(prefix="/api")
+
+# Calls that spend model quota are capped per visitor, so one tab in a loop cannot use up the free tier.
+METER_LIMIT, METER_WINDOW = 30, 600.0
+_HITS: dict[str, deque[float]] = {}
+
+
+def _metered(request: Request) -> None:
+    from residual.agents.chat import available
+
+    if not available():
+        return
+    who = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "?")
+    now = time.monotonic()
+    hits = _HITS.setdefault(who, deque())
+    while hits and now - hits[0] > METER_WINDOW:
+        hits.popleft()
+    if len(hits) >= METER_LIMIT:
+        raise problem(
+            429, "slow_down", "That is a lot of requests in a few minutes.",
+            "Wait a few minutes and try again — this keeps the free models available for everyone.",
+        )
+    hits.append(now)
+    if len(_HITS) > 5000:
+        for key in [k for k, v in _HITS.items() if not v]:
+            del _HITS[key]
 
 
 def problem(status: int, code: str, message: str, fix: str = "", field: str = "") -> HTTPException:
@@ -463,7 +489,7 @@ class ExplainOut(BaseModel):
     reason: str
 
 
-@router.post("/explain", response_model=ExplainOut)
+@router.post("/explain", dependencies=[Depends(_metered)], response_model=ExplainOut)
 def explain_cause(body: ExplainIn) -> ExplainOut:
     from residual.agents.chat import Chat
     from residual.explain.plain import explain
@@ -491,7 +517,7 @@ class AskOut(BaseModel):
     note: str = ""
 
 
-@router.post("/ask", response_model=AskOut)
+@router.post("/ask", dependencies=[Depends(_metered)], response_model=AskOut)
 def ask_question(body: AskIn) -> AskOut:
     from residual.agents.chat import Chat
     from residual.explain import qa
@@ -539,6 +565,31 @@ class InvestigateOut(BaseModel):
     notes: list[str] = []
 
 
+def _rederivable(session: Session, cause: Any) -> bool:
+    from residual.explain.close import run_close
+    from residual.explain.propose import without
+
+    left = run_close(
+        session.events, session.start, session.end, session.contracted, session.warehouse,
+        hypotheses=without(cause, session.contracted),
+    )
+    return left.residual.paise != 0
+
+
+def _search_payouts(session: Session, close: Any) -> InvestigateOut:
+    from residual.agents.payout_search import search
+
+    lost = next((f for f in close.findings if str(f.cause) == "settlement_never_arrived" and f.amount.paise), None)
+    if lost is None:
+        raise problem(409, "nothing_to_check", "No payout is missing here, so there is nothing to search for.", "")
+    found = search(session.warehouse, [str(e) for e in lost.evidence.entity_ids])
+    return InvestigateOut(
+        mode="payout_search", cause="settlement_never_arrived", driver="payout search", short_by=str(lost.amount),
+        steps=[StepOut(tool=look.tool, args=look.args, ok=True, found=look.found) for look in found.looks],
+        proposal=None, verdict=found.verdict(), accepted=found.confirmed_missing,
+    )
+
+
 def _drivers() -> list[Any]:
     """Models first, in router order (at most two, to stay inside the function's time limit), then the analyst."""
     from residual.agents.chat import available
@@ -553,7 +604,7 @@ def _label(driver: Any) -> str:
     return f"{provider}/{driver.model}" if provider else "analyst"
 
 
-@router.post("/investigate", response_model=InvestigateOut)
+@router.post("/investigate", dependencies=[Depends(_metered)], response_model=InvestigateOut)
 def investigate_residual(body: InvestigateIn) -> InvestigateOut:
     from residual.agents.chat import why
     from residual.agents.loop import investigate
@@ -565,6 +616,9 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
     session = _session(body.token)
     close = session.close()
 
+    if body.cause == "settlement_never_arrived":
+        return _search_payouts(session, close)
+
     if close.residual.paise != 0 and not body.cause:
         mode, cause_name, short = "open_residual", "", str(close.residual)
 
@@ -575,9 +629,12 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
     else:
         candidates = [f for f in close.findings if f.amount.paise and not refined_by(f.cause, session.contracted)]
         if body.cause:
-            candidates = [f for f in candidates if str(f.cause) == body.cause]
+            candidates = [f for f in candidates if str(f.cause) == body.cause and _rederivable(session, f.cause)]
         else:
             candidates.sort(key=lambda f: (not f.alarming, -abs(f.amount.paise)))
+            # A line that a sibling absorbs when removed (never-arrived vs in-flight, holiday vs T+2)
+            # cannot be re-derived on its own, so the agent would have nothing to find.
+            candidates = [f for f in candidates if _rederivable(session, f.cause)][:1]
         if not candidates:
             raise problem(
                 409, "nothing_to_check",
@@ -602,9 +659,12 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
         except Exception as exc:  # noqa: BLE001 - a model failure hands over to the next driver
             notes.append(f"{_label(driver)} did not answer ({why(exc)})")
             continue
-        if verdict.accepted or driver is drivers[-1]:
+        if verdict.accepted or driver is drivers[-1] or run.stopped in ("nothing open", "excluded"):
             break
-        notes.append(f"{_label(driver)} proposed an answer the verifier rejected: {verdict.reason()}")
+        if run.proposal is None:
+            notes.append(f"{_label(driver)} did not settle on a cause ({run.stopped or 'no proposal'})")
+        else:
+            notes.append(f"{_label(driver)} proposed an answer the verifier rejected: {verdict.reason()}")
 
     return InvestigateOut(
         mode=mode, cause=cause_name, driver=_label(driver), short_by=short,
@@ -635,7 +695,7 @@ class DraftOut(BaseModel):
     items: int
 
 
-@router.post("/draft", response_model=DraftOut)
+@router.post("/draft", dependencies=[Depends(_metered)], response_model=DraftOut)
 def draft_action(body: DraftIn) -> DraftOut:
     from residual.agents.chat import Chat
     from residual.agents.drafts import KINDS, NothingToDraft, draft

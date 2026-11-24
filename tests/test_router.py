@@ -18,6 +18,7 @@ def no_keys(monkeypatch):
         monkeypatch.delenv(key, raising=False)
         monkeypatch.delenv(key.replace("API_KEY", "MODEL"), raising=False)
     monkeypatch.setattr(loop, "_LIVE", {})
+    monkeypatch.setattr(loop, "_LISTED", {})
 
     def offline(url, **kwargs):
         raise httpx.ConnectError("no network in tests")
@@ -69,14 +70,20 @@ def test_a_retired_model_is_an_env_change(monkeypatch):
 
 
 def test_the_investigator_falls_back_to_the_analyst_when_models_fail(monkeypatch):
+    from tests.test_samples import MANIFEST, upload
+
     monkeypatch.setenv("GROQ_API_KEY", "k")
     monkeypatch.setattr(httpx, "post", lambda url, **kw: _reply(500))
     client = TestClient(app)
-    token = client.post("/api/demo").json()["token"]
-    body = client.post("/api/investigate", json={"token": token}).json()
+    files = MANIFEST["sets"]["missing"]["files"]
+    token = client.post(
+        "/api/close", files=dict(upload(s, files[s]) for s in ("recon", "statement")), data={"contract": MANIFEST["rates"]},
+    ).json()["token"]
+    body = client.post("/api/investigate", json={"token": token, "cause": "refunds_issued"}).json()
     assert body["driver"] == "analyst"
     assert body["notes"] and "HTTP 500" in body["notes"][0]
     assert body["steps"]
+    assert body["accepted"] is True
 
 
 def test_the_live_check_reports_each_provider(monkeypatch):
@@ -171,3 +178,118 @@ def test_asking_about_missing_payouts_without_a_statement_says_what_is_needed(mo
     body = _ask(client, token, "Which payouts never reached my bank?")
     assert not body["rows"]
     assert "bank statement" in body["note"]
+
+
+def test_a_throttled_free_model_hands_over_to_a_sibling(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    asked: list[str] = []
+
+    def post(url, json, **kw):
+        asked.append(json["model"])
+        return _reply(200, "sibling") if json["model"] == "b/llama-3.3-70b-instruct:free" else _reply(429)
+
+    listing = {"data": [
+        {"id": "a/qwen3:free", "supported_parameters": ["tools"]},
+        {"id": "b/llama-3.3-70b-instruct:free", "supported_parameters": ["tools"]},
+    ]}
+    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: httpx.Response(200, json=listing, request=httpx.Request("GET", url)))
+    assert chat.Chat().say("s", "p") == "sibling"
+    assert asked == [loop.PROVIDERS["openrouter"]["model"], "b/llama-3.3-70b-instruct:free"]
+
+
+def test_swapping_stops_after_a_few_tries(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    asked: list[str] = []
+    monkeypatch.setattr(httpx, "post", lambda url, json, **kw: asked.append(json["model"]) or _reply(429))
+    listing = {"data": [{"id": f"m{i}/llama:free"} for i in range(6)]}
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: httpx.Response(200, json=listing, request=httpx.Request("GET", url)))
+    with pytest.raises(chat.AllProvidersFailed):
+        chat.Chat().say("s", "p")
+    assert len(asked) == 1 + loop.ALTERNATES
+
+
+def _token(client, key):
+    from tests.test_samples import MANIFEST, upload
+
+    files = MANIFEST["sets"][key]["files"]
+    return client.post(
+        "/api/close", files=dict(upload(s, files[s]) for s in ("recon", "statement")), data={"contract": MANIFEST["rates"]},
+    ).json()["token"]
+
+
+def test_a_missing_payout_is_searched_for_before_it_is_confirmed():
+    client = TestClient(app)
+    body = client.post("/api/investigate", json={"token": _token(client, "missing"), "cause": "settlement_never_arrived"}).json()
+    assert body["mode"] == "payout_search"
+    assert [s["tool"] for s in body["steps"]] == ["search_reference", "search_amount"]
+    assert body["accepted"] is True
+
+
+def test_a_payout_that_landed_under_a_mangled_reference_is_flagged_not_confirmed():
+    from tests.test_samples import MANIFEST, SAMPLES, upload
+
+    files = MANIFEST["sets"]["missing"]["files"]
+    client = TestClient(app)
+    first = client.post(
+        "/api/close", files=dict(upload(s, files[s]) for s in ("recon", "statement")), data={"contract": MANIFEST["rates"]},
+    ).json()
+    utr = next(f for f in first["findings"] if f["cause"] == "settlement_never_arrived")["refs"][0]
+    import csv
+    import io
+
+    lines = (SAMPLES / files["statement"]).read_text().splitlines()
+    header = next(i for i, line in enumerate(lines) if line.startswith("Date,"))
+    last = next(i for i in range(len(lines) - 1, header, -1) if lines[i].count(",") >= 6)
+    # Append a credit whose narration keeps only the UTR's tail, as some banks print it.
+    row = next(csv.reader([lines[last]]))
+    closing = float(row[6].replace(",", "")) + 44008.31
+    extra = io.StringIO()
+    csv.writer(extra, lineterminator="").writerow(
+        ["24/03/26", f"NEFT CR-RAZORPAY-XX{utr[-8:]}", "", "24/03/26", "", "44,008.31", f"{closing:,.2f}"]
+    )
+    edited = "\n".join([*lines[: last + 1], extra.getvalue(), *lines[last + 1 :]]) + "\n"
+    token = client.post(
+        "/api/close",
+        files={"recon": upload("recon", files["recon"])[1], "statement": ("s.csv", edited.encode(), "text/csv")},
+        data={"contract": MANIFEST["rates"]},
+    ).json()["token"]
+    body = client.post("/api/investigate", json={"token": token, "cause": "settlement_never_arrived"})
+    if body.status_code == 409:
+        pytest.fail("expected the search to run")
+    assert body.json()["accepted"] is False
+    assert "may be bank credit" in body.json()["verdict"]
+
+
+@pytest.mark.parametrize("key", ["clean", "missing", "overcharged"])
+def test_the_generic_second_opinion_always_has_something_to_find(key):
+    client = TestClient(app)
+    body = client.post("/api/investigate", json={"token": _token(client, key)}).json()
+    assert body["steps"], body
+    assert body["accepted"] is True, body
+
+
+def test_model_calls_are_capped_per_visitor(monkeypatch):
+    from residual.web import api
+
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: _reply(200, "SELECT 1 AS one"))
+    monkeypatch.setattr(api, "_HITS", {})
+    monkeypatch.setattr(api, "METER_LIMIT", 3)
+    client = TestClient(app)
+    token = _token(client, "clean")
+    seen = [client.post("/api/ask", json={"token": token, "question": "anything at all?"}, headers={"x-forwarded-for": "9.9.9.9"}).status_code for _ in range(4)]
+    assert seen == [200, 200, 200, 429]
+    other = client.post("/api/ask", json={"token": token, "question": "anything at all?"}, headers={"x-forwarded-for": "8.8.8.8"})
+    assert other.status_code == 200
+
+
+def test_without_a_model_nothing_is_metered(monkeypatch):
+    from residual.web import api
+
+    monkeypatch.setattr(api, "_HITS", {})
+    monkeypatch.setattr(api, "METER_LIMIT", 1)
+    client = TestClient(app)
+    token = _token(client, "clean")
+    for _ in range(3):
+        assert client.post("/api/ask", json={"token": token, "question": "fees by method"}).status_code == 200
