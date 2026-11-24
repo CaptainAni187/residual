@@ -466,7 +466,7 @@ class OpenAIDriver:
         model: str = "",
         api_key: str = "",
         post: Any = None,
-        budget: float = 30.0,
+        budget: float = 25.0,
     ) -> None:
         if provider not in PROVIDERS:
             raise ValueError(f"unknown provider {provider!r}; known: {sorted(PROVIDERS)}")

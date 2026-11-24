@@ -23,7 +23,8 @@
   ],
   "functions": {
     "api/index.py": {
-      "includeFiles": "src/**"
+      "includeFiles": "src/**",
+      "maxDuration": 60
     }
   }
 }

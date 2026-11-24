@@ -56,7 +56,7 @@ class AllProvidersFailed(RuntimeError):
 class Chat:
     """Speaks through whichever configured provider answers, falling back down ORDER on any failure."""
 
-    def __init__(self, provider: str = "", model: str = "", post: Any = None, budget: float = 25.0) -> None:
+    def __init__(self, provider: str = "", model: str = "", post: Any = None, budget: float = 20.0) -> None:
         ready = available()
         if provider and provider in ready:
             ready = [provider, *[p for p in ready if p != provider]]

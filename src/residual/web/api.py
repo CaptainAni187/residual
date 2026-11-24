@@ -640,7 +640,7 @@ def _drivers() -> list[Any]:
     from residual.agents.chat import available
     from residual.agents.loop import PROVIDERS, Analyst, OpenAIDriver
 
-    models: list[Any] = [OpenAIDriver(p) for p in available() if p in PROVIDERS][:2]
+    models: list[Any] = [OpenAIDriver(p, budget=20) for p in available() if p in PROVIDERS][:2]
     return [*models, Analyst()]
 
 

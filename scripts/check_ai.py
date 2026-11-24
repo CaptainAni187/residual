@@ -57,6 +57,9 @@ for key in ("missing", "overcharged"):
         "statement": (f"bank_statement_{key}.csv", (SAMPLES / f"bank_statement_{key}.csv").read_bytes()),
     }
     closed = post("/close", files=files, data={"contract": RATES})
+    if "token" not in closed:
+        problems.append(f"/close on {key} failed: {closed.get('detail') or closed}")
+        continue
     token = closed["token"]
     print(f"== {key}: residual {closed['residual_paise']} paise, {len(closed['findings'])} findings")
 
