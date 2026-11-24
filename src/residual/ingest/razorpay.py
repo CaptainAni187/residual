@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from residual.ledger import events as ev
@@ -42,6 +44,21 @@ def _money(paise: Any) -> Money:
 
 
 KNOWN_TYPES = frozenset({"payment", "refund", "transfer", "adjustment"})
+
+
+def split_fee(row: dict[str, Any]) -> tuple[Money, Money]:
+    """Return (fee before GST, GST) for a recon row.
+
+    Razorpay reports `fee` including the GST in `tax`, so the amount credited is
+    amount - fee. Some exports carry the fee before GST instead, where the credit is
+    amount - fee - tax. The row's own figures say which; counting the GST twice would
+    show every payment as overcharged by exactly its GST.
+    """
+    fee, tax = int(row.get("fee") or 0), int(row.get("tax") or 0)
+    amount, credit = int(row.get("amount") or 0), row.get("credit")
+    if tax and credit is not None and int(credit) == amount - fee - tax:
+        return Money(fee), Money(tax)
+    return Money(fee - tax), Money(tax)
 
 
 def to_events(
@@ -92,6 +109,7 @@ def to_events(
             batch["settled_at"] = batch["settled_at"] or row.get("settled_at")
 
         if kind == "payment":
+            fee, tax = split_fee(row)
             out.append(
                 ev.PaymentCaptured(
                     event_id=f"rzp-cap-{entity}",
@@ -101,8 +119,8 @@ def to_events(
                     order_id=row.get("order_id") or "",
                     gross=_money(row.get("amount")),
                     method=_METHODS.get(row.get("method") or "", ev.Method.NETBANKING),
-                    fee=_money(row.get("fee")),
-                    tax=_money(row.get("tax")),
+                    fee=fee,
+                    tax=tax,
                     card_network=row.get("card_network"),
                 )
             )
@@ -387,3 +405,88 @@ def fetch_payments(count: int = 100, timeout: float = 30.0) -> list[dict[str, An
     )
     response.raise_for_status()
     return list(response.json().get("items", []))
+
+
+_MONEY_FIELDS = ("amount", "debit", "credit", "fee", "tax", "amount_refunded")
+_TIME_FIELDS = ("created_at", "settled_at")
+_ALIASES = {
+    "id": "id", "entity_id": "entity_id", "entity": "entity", "type": "type", "status": "status",
+    "amount": "amount", "debit": "debit", "credit": "credit", "currency": "currency",
+    "fee": "fee", "fees": "fee", "tax": "tax", "gst": "tax", "method": "method",
+    "payment_method": "method", "order_id": "order_id", "payment_id": "payment_id",
+    "settlement_id": "settlement_id", "settlement_utr": "settlement_utr", "utr": "settlement_utr",
+    "created_at": "created_at", "created_on": "created_at", "settled_at": "settled_at",
+    "settled_on": "settled_at", "settled": "settled", "on_hold": "on_hold", "description": "description",
+    "card_network": "card_network", "amount_refunded": "amount_refunded", "error_code": "error_code",
+}
+
+
+def _key(header: str) -> str:
+    text = re.sub(r"\(.*?\)", "", header or "").strip().lower()
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
+
+def rows_from_table(table: list[list[str]]) -> tuple[list[dict[str, Any]], str]:
+    """Turn a report downloaded from the dashboard as CSV or Excel into the API's row shape.
+
+    Dashboard exports write amounts in rupees with decimals and times as text; the API uses
+    integer paise and epoch seconds. Returns the rows and how the amounts were read.
+    """
+    header_at = next(
+        (i for i, row in enumerate(table[:30])
+         if {"amount"} <= {_ALIASES.get(_key(c)) for c in row}
+         and ({"entity_id", "id"} & {_ALIASES.get(_key(c)) for c in row})),
+        None,
+    )
+    if header_at is None:
+        raise UnsupportedRow("no header row with an id and an amount column")
+    names = [_ALIASES.get(_key(c), _key(c)) for c in table[header_at]]
+    raw_headers = " ".join(table[header_at]).lower()
+    records = [
+        {names[k]: (cell or "").strip() for k, cell in enumerate(row) if k < len(names) and names[k]}
+        for row in table[header_at + 1:]
+        if any((c or "").strip() for c in row)
+    ]
+    money = [r.get(f, "") for r in records for f in _MONEY_FIELDS if r.get(f, "")]
+    in_rupees = any("." in m for m in money) or "inr" in raw_headers or "rs" in raw_headers.split()
+    unit = "rupees" if in_rupees else "paise"
+
+    def amount(text: str) -> int:
+        value = Decimal(re.sub(r"[^\d.\-]", "", text) or "0")
+        return int((value * 100).quantize(Decimal(1))) if in_rupees else int(value)
+
+    out: list[dict[str, Any]] = []
+    for r in records:
+        row: dict[str, Any] = dict(r)
+        for f in _MONEY_FIELDS:
+            if f in row:
+                row[f] = amount(row[f]) if row[f] else 0
+        for f in _TIME_FIELDS:
+            row[f] = _epoch(row.get(f, ""))
+        for f in ("settled", "on_hold"):
+            if f in row:
+                row[f] = str(row[f]).strip().lower() in {"true", "yes", "1", "y"}
+        for f, v in list(row.items()):
+            if v == "":
+                row[f] = None
+        if row.get("id") and not row.get("entity_id") and str(row["id"]).startswith("pay_") and row.get("status"):
+            row["entity"] = "payment"
+        if row.get("method"):
+            row["method"] = str(row["method"]).lower().replace(" ", "")
+        out.append(row)
+    return out, unit
+
+
+def _epoch(text: Any) -> int | None:
+    from residual.ingest.bank import parse_date
+
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    day = parse_date(raw)
+    if day is None:
+        return None
+    # Noon in India, so the calendar day survives any timezone conversion.
+    return int(datetime(day.year, day.month, day.day, 6, 30, tzinfo=UTC).timestamp())

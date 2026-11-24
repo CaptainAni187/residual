@@ -61,7 +61,7 @@ export function FileSlot({
       {file ? (
         <div className="chip">
           <span className="chip-icon" aria-hidden="true">
-            {file.name.toLowerCase().endsWith(".pdf") ? "PDF" : file.name.toLowerCase().endsWith(".csv") ? "CSV" : "JSON"}
+            {(file.name.split(".").pop() ?? "file").slice(0, 4).toUpperCase()}
           </span>
           <span className="chip-name">{file.name}</span>
           <span className="chip-size">{size(file.size)}</span>

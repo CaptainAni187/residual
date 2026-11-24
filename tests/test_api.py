@@ -68,7 +68,7 @@ def _err(reply):
 def test_a_file_that_is_not_json_is_refused(client):
     reply = client.post("/api/close", files={"recon": ("x.json", b"nope", "application/json")})
     assert reply.status_code == 400
-    assert _err(reply)["code"] == "not_json"
+    assert _err(reply)["code"] == "not_a_report"
     assert _err(reply)["field"] == "recon"
     assert _err(reply)["fix"]
 
@@ -239,12 +239,12 @@ def test_rates_that_are_not_rates_are_refused_on_the_right_field(client, recon_b
         assert needle in _err(reply)["message"], (bad, _err(reply)["message"])
 
 
-def test_a_csv_uploaded_as_the_report_gets_a_specific_hint(client):
+def test_a_csv_that_is_not_a_gateway_report_says_what_to_upload(client):
     reply = client.post(
-        "/api/close", files={"recon": ("report.csv", b"id,amount,fee\n1,2,3\n", "text/csv")}
+        "/api/close", files={"recon": ("report.csv", b"name,city\nA,B\n", "text/csv")}
     )
-    assert _err(reply)["code"] == "not_json"
-    assert "CSV" in _err(reply)["fix"]
+    assert _err(reply)["code"] == "not_a_report"
+    assert "CSV, Excel or JSON" in _err(reply)["fix"]
 
 
 def test_an_empty_file_is_refused_before_it_is_parsed(client):

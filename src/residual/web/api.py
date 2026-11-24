@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
+import re
 import time
 import uuid
 from collections import deque
@@ -160,19 +163,41 @@ async def _read(upload: UploadFile, field_name: str) -> bytes:
     return blob
 
 
-def _events_from(blob: bytes, name: str, tally: dict[str, Any] | None = None) -> list[EventBase]:
-    text = blob.decode("utf-8-sig", errors="replace")
-    try:
-        body = json.loads(text)
-    except json.JSONDecodeError as exc:
-        first = text.splitlines()[0] if text.strip() else ""
-        hint = (
-            "This looks like a CSV. Download the report as JSON from the gateway dashboard."
-            if "," in first
-            else "Download the settlement or payments report from the gateway dashboard as JSON."
-        )
-        raise problem(400, "not_json", f"{name} is not a gateway report.", hint, "recon") from exc
+def _report_rows(blob: bytes, name: str, tally: dict[str, Any] | None) -> Any:
+    """A report as the API returns it (JSON) or as the dashboard downloads it (CSV or Excel)."""
+    from residual.ingest.razorpay import rows_from_table
 
+    head = blob[:2048].lstrip()
+    if head.removeprefix(b"\xef\xbb\xbf")[:1] in (b"{", b"["):
+        try:
+            return json.loads(bank.decode(blob))
+        except json.JSONDecodeError as exc:
+            raise problem(400, "not_json", f"{name} looks like JSON but is damaged.", "Download the report again.", "recon") from exc
+    try:
+        if head.startswith(b"PK\x03\x04"):
+            table = bank._xlsx_rows(blob, name)
+        elif head.startswith(b"\xd0\xcf\x11\xe0"):
+            table = bank._xls_rows(blob, name)
+        elif head.startswith(b"%PDF"):
+            raise problem(400, "pdf_report", f"{name} is a PDF.", "Download the gateway report as CSV or Excel; a PDF of it cannot be read reliably.", "recon")
+        else:
+            text = bank.decode(blob)
+            table = list(csv.reader(io.StringIO(text), delimiter=bank._delimiter(text)))
+        rows, unit = rows_from_table(table)
+    except bank.UnreadableStatement as exc:
+        raise problem(400, "not_a_report", f"Could not open {name}.", "Download the report again as CSV, Excel or JSON.", "recon") from exc
+    except UnsupportedRow as exc:
+        raise problem(
+            400, "not_a_report", f"{name} does not look like a gateway report.",
+            "Upload the settlement recon or payments report from your gateway dashboard (CSV, Excel or JSON).", "recon",
+        ) from exc
+    if tally is not None:
+        tally["unit"] = unit
+    return rows
+
+
+def _events_from(blob: bytes, name: str, tally: dict[str, Any] | None = None) -> list[EventBase]:
+    body = _report_rows(blob, name, tally)
     items = body.get("items", body) if isinstance(body, dict) else body
     if not isinstance(items, list) or not items:
         raise problem(
@@ -203,13 +228,8 @@ def _events_from(blob: bytes, name: str, tally: dict[str, Any] | None = None) ->
 async def _read_statement(upload: UploadFile, password: str, field_name: str = "statement") -> bank.Statement:
     blob = await _read(upload, field_name)
     name = upload.filename or "the statement"
-    is_pdf = name.lower().endswith(".pdf") or blob.lstrip().startswith(b"%PDF")
     try:
-        parsed = (
-            bank.parse_pdf_bytes(blob, password=password or None, label=name)
-            if is_pdf
-            else bank.parse(blob.decode("utf-8-sig", errors="replace"))
-        )
+        parsed = bank.parse_bytes(blob, name, password=password or None)
     except bank.PasswordRequired as exc:
         if exc.wrong:
             raise problem(422, "bad_password", "That password did not open the statement.", "Banks usually use your customer ID or date of birth. Check the email the statement came with.", field_name) from exc
@@ -217,7 +237,7 @@ async def _read_statement(upload: UploadFile, password: str, field_name: str = "
     except bank.NeedsOcr as exc:
         raise problem(422, "needs_ocr", f"{name} is a scanned image, not a text PDF.", "Download the statement from net banking as a PDF or CSV rather than scanning a printout.", field_name) from exc
     except bank.UnreadableStatement as exc:
-        raise problem(422, "statement_unreadable", f"Could not read {name}: {exc}.", "Try the CSV or Excel-CSV download from net banking instead.", field_name) from exc
+        raise problem(422, "statement_unreadable", f"Could not read {name}: {exc}.", "Download it again from net banking as PDF, Excel or CSV, for the dates you need.", field_name) from exc
 
     if not parsed.rows:
         raise problem(422, "empty_statement", f"No transactions were found in {name}.", "Check it covers the same dates as the gateway report.", field_name)
@@ -404,6 +424,8 @@ async def close_upload(
     events = _events_from(await _read(recon, "recon"), recon.filename or "the report", tally)
 
     notes: list[str] = []
+    if tally.get("unit") == "rupees":
+        notes.append("The report's amounts had decimals, so they were read as rupees, as the dashboard download writes them.")
     foreign = [c for c in tally.get("currencies", []) if c != "INR"]
     if foreign:
         notes.append(f"Rows in {', '.join(foreign)} were left out. This works in rupees only, and recording a foreign amount at par would be silently wrong.")
@@ -743,7 +765,7 @@ async def read_statement(
 ) -> StatementOut:
     parsed = await _read_statement(statement, password)
     rows = parsed.rows
-    gateway = sum(1 for r in rows if r.credit.paise and "razorpay" in r.narration.lower())
+    gateway = sum(1 for r in rows if r.credit.paise and re.search(r"razorpay|\brzp", r.narration, re.IGNORECASE))
 
     assumed = [f"Read as {'a PDF' if parsed.strategy != 'csv' else 'a CSV'}; the layout was detected automatically."]
     if parsed.balance_checked:
@@ -753,6 +775,8 @@ async def read_statement(
         )
     else:
         assumed.append("This statement prints no running balance, so it could not check itself.")
+    if parsed.order == "newest first":
+        assumed.append("The bank listed the newest transaction first; it is shown here oldest first.")
     if parsed.skipped:
         assumed.append(f"{len(parsed.skipped)} line(s) looked like headers, totals or notes and were left out.")
 

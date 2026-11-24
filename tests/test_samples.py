@@ -17,7 +17,7 @@ from residual.web.app import app
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "public" / "samples"
 MANIFEST = json.loads((SAMPLES / "manifest.json").read_text())
-TYPES = {".json": "application/json", ".csv": "text/csv", ".pdf": "application/pdf"}
+TYPES = {".json": "application/json", ".csv": "text/csv", ".pdf": "application/pdf", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
 
 
 @pytest.fixture(scope="module")
@@ -53,7 +53,7 @@ def test_every_tool_offers_at_least_three_samples_and_every_file_exists():
                 assert (SAMPLES / name).is_file(), name
 
 
-@pytest.mark.parametrize("key", ["clean", "missing", "overcharged"])
+@pytest.mark.parametrize("key", ["clean", "missing", "overcharged", "missing_pdf"])
 def test_every_report_sample_closes_to_zero_against_its_statement(client, key):
     body = close(client, key)
     assert body["residual_paise"] == 0
@@ -68,6 +68,10 @@ def test_the_clean_sample_has_nothing_to_chase(client):
 
 def test_the_missing_sample_finds_the_lost_payout(client):
     assert amount(close(client, "missing"), "settlement_never_arrived") > 0
+
+
+def test_the_long_pdf_finds_exactly_the_same_lost_payout_as_the_csv(client):
+    assert amount(close(client, "missing_pdf"), "settlement_never_arrived") == amount(close(client, "missing"), "settlement_never_arrived")
 
 
 def test_the_overcharged_sample_finds_the_fee_hike(client):

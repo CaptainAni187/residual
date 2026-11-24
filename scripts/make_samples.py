@@ -97,7 +97,7 @@ def build(s: Scenario) -> None:
             tax = pct(fee, "18")
             s.rows.append({
                 "entity_id": f"pay_{s.key[:3]}{n:04d}", "type": "payment", "amount": amount,
-                "debit": 0, "credit": amount - fee - tax, "currency": "INR", "fee": fee, "tax": tax,
+                "debit": 0, "credit": amount - fee - tax, "currency": "INR", "fee": fee + tax, "tax": tax,
                 "method": method, "order_id": f"order_{s.key[:3]}{n:04d}", "created_at": epoch(day),
                 "settled": is_settled, "on_hold": False,
                 "settlement_id": sid if is_settled else None,
@@ -183,7 +183,8 @@ def gstr2b(s: Scenario, keep_weeks: int = 3, bogus: bool = False) -> dict:
     for week in range(3):
         lo, hi = START + timedelta(days=7 * week), START + timedelta(days=7 * week + 6)
         fees = [r for r in s.rows if r["type"] == "payment" and lo <= datetime.fromtimestamp(r["created_at"], tz=UTC).date() <= hi]
-        fee, tax = sum(r["fee"] for r in fees), sum(r["tax"] for r in fees)
+        # Razorpay's fee includes the GST shown in tax; the invoice's taxable value is the fee before GST.
+        fee, tax = sum(r["fee"] - r["tax"] for r in fees), sum(r["tax"] for r in fees)
         if week >= keep_weeks or not tax:
             continue
         half = tax // 2
@@ -214,7 +215,7 @@ def main() -> None:
     (OUT / "gstr2b_all_claimable.json").write_text(json.dumps(gstr2b(clean), indent=1) + "\n")
     (OUT / "gstr2b_one_week_missing.json").write_text(json.dumps(gstr2b(clean, keep_weeks=2), indent=1) + "\n")
     (OUT / "gstr2b_bad_supplier.json").write_text(json.dumps(gstr2b(clean, bogus=True), indent=1) + "\n")
-    for name in ("icici.csv", "sbi.csv", "axis.csv", "hdfc.pdf", "hdfc_locked.pdf"):
+    for name in ("icici.csv", "sbi.csv", "axis.csv", "hdfc.pdf", "hdfc_locked.pdf", "hdfc_long.pdf", "hdfc.xlsx"):
         shutil.copy(FIXTURES / "statements" / name, OUT / f"statement_{name}")
     report = lambda k: f"razorpay_report_{k}.json"
     sets = {
@@ -223,6 +224,9 @@ def main() -> None:
         for s in SCENARIOS
     }
     sets |= {
+        "missing_pdf": {"title": "Missing payout, 5-page PDF",
+                        "story": "The same missing payout, but the bank statement is a 5-page PDF with a cover page, wrapped lines and terms.",
+                        "files": {"recon": report("missing"), "statement": "statement_hdfc_long.pdf"}},
         "gst_all": {"title": "All credit claimable", "story": "Every rupee of GST on fees shows up in GSTR-2B.",
                     "files": {"recon": report("clean"), "gstr2b": "gstr2b_all_claimable.json"}},
         "gst_week": {"title": "A week of invoices missing", "story": "The gateway has not filed the last week's invoice yet.",
@@ -235,16 +239,20 @@ def main() -> None:
         "st_sbi": {"title": "SBI, CSV", "story": "SBI's layout, with a Debit and Credit column.", "files": {"statement": "statement_sbi.csv"}},
         "st_axis": {"title": "Axis, CSV", "story": "Axis prints DR/CR beside one amount column.", "files": {"statement": "statement_axis.csv"}},
         "st_pdf": {"title": "HDFC, PDF", "story": "A PDF statement, layout detected automatically.", "files": {"statement": "statement_hdfc.pdf"}},
+        "st_long": {"title": "5-page PDF with extras", "story": "A cover page, the header on page one only, wrapped narrations and a terms page.",
+                    "files": {"statement": "statement_hdfc_long.pdf"}},
+        "st_xlsx": {"title": "Excel (.xlsx)", "story": "The Excel download, with real dates and numbers.", "files": {"statement": "statement_hdfc.xlsx"}},
         "st_locked": {"title": "Password-protected PDF", "story": "Locked like a real bank statement. Password: HDFC1234",
                       "files": {"statement": "statement_hdfc_locked.pdf"}, "password": "HDFC1234"},
     }
     trio = [s.key for s in SCENARIOS]
+    four = [*trio, "missing_pdf"]
     manifest = {
         "rates": RATES,
         "sets": sets,
-        "tools": {"reconcile": trio, "missing": trio, "fees": trio, "dashboard": trio, "ask": trio,
+        "tools": {"reconcile": four, "missing": four, "fees": trio, "dashboard": four, "ask": trio,
                   "gst": ["gst_all", "gst_week", "gst_bad"],
-                  "statement": ["st_hdfc", "st_icici", "st_sbi", "st_axis", "st_pdf", "st_locked"]},
+                  "statement": ["st_hdfc", "st_icici", "st_sbi", "st_axis", "st_pdf", "st_long", "st_xlsx", "st_locked"]},
     }
     (OUT / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
     print("\n".join(sorted(p.name for p in OUT.iterdir())))

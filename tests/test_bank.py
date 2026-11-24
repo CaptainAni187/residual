@@ -321,3 +321,27 @@ def test_two_hundred_thousand_rows_parse_completely() -> None:
     parsed = bank.parse(rows)
     assert len(parsed.rows) == 200_000
     assert parsed.reconciles, "a long statement must still verify against itself"
+
+
+FORMATS = Path(__file__).parent / "fixtures" / "statements" / "formats"
+
+
+@pytest.mark.parametrize("name", sorted(p.name for p in FORMATS.iterdir()))
+def test_every_shape_a_bank_hands_out_reads_the_same_nineteen_rows(name):
+    """The same statement as PDF (cover page, header on page one only, wrapped lines, newest first),
+    Excel (.xlsx, .xls, an HTML table named .xls) and text (semicolon, tab, UTF-16, Windows-1252)."""
+    parsed = bank.parse_bytes((FORMATS / name).read_bytes(), name)
+    assert len(parsed.rows) == 19
+    assert parsed.reconciles, parsed.report()
+    assert parsed.rows[0].txn_date <= parsed.rows[-1].txn_date, "always oldest first"
+    assert any("20260302247187" in r.narration for r in parsed.rows), "a wrapped UTR must survive"
+
+
+def test_a_newest_first_statement_says_so():
+    parsed = bank.parse_bytes((FORMATS / "newest_first.pdf").read_bytes(), "newest_first.pdf")
+    assert parsed.order == "newest first"
+
+
+def test_a_page_footer_is_not_glued_onto_a_narration():
+    parsed = bank.parse_bytes((FORMATS / "long_cover_wrapped.pdf").read_bytes(), "x.pdf")
+    assert not any("page" in r.narration.lower() for r in parsed.rows)

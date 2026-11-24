@@ -30,17 +30,17 @@ const REPORT: Slot = {
   id: "recon",
   label: "Razorpay report",
   required: true,
-  accept: ".json,application/json",
-  formats: "JSON · up to 4 MB",
-  help: "Your settlement recon or payments report, downloaded as JSON from the reports section of your gateway dashboard. Pick the date range you want checked.",
+  accept: ".csv,.xlsx,.xls,.json,text/csv,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  formats: "CSV, Excel or JSON · up to 4 MB",
+  help: "Your settlement recon or payments report, downloaded from the reports section of your gateway dashboard as CSV, Excel or JSON. Pick the date range you want checked.",
 };
 
 const STATEMENT: Slot = {
   id: "statement",
   label: "Bank statement",
   required: false,
-  accept: ".csv,.pdf,text/csv,application/pdf",
-  formats: "CSV or PDF · up to 4 MB",
+  accept: ".pdf,.csv,.xlsx,.xls,.txt,application/pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  formats: "PDF, Excel or CSV · up to 4 MB",
   help: "The statement for the account your payouts land in, from net banking, for the same dates. Password-protected PDFs are fine — you will be asked for the password, which is used once and never kept.",
 };
 

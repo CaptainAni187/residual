@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -39,10 +39,11 @@ _ROLES: dict[str, tuple[str, ...]] = {
 }
 
 _DATE_FORMATS = (
-    "%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y",
-    "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%d %B %Y",
-    "%Y-%m-%d", "%m/%d/%Y",
+    "%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y", "%d.%m.%Y", "%d.%m.%y",
+    "%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%d %B %Y", "%d %b %y", "%d %b, %Y", "%d-%B-%Y",
+    "%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y",
 )
+_TIME = re.compile(r"[ T]\d{1,2}:\d{2}(:\d{2})?(\s*[AP]M)?$", re.IGNORECASE)
 
 _TRAILING_MARK = re.compile(r"\s*(cr|dr)\s*$", re.IGNORECASE)
 
@@ -55,6 +56,7 @@ class PdfPage(Protocol):
 
 
 MAX_BYTES = 256 * 1024 * 1024
+HEADER_SEARCH = 3000
 MAX_FIELD = 64 * 1024
 
 
@@ -86,8 +88,8 @@ def _norm(cell: str) -> str:
 
 
 def parse_date(text: str) -> date | None:
-    text = (text or "").strip()
-    if not text:
+    text = _TIME.sub("", (text or "").strip()).strip()
+    if not text or len(text) > 20:
         return None
     for fmt in _DATE_FORMATS:
         try:
@@ -108,7 +110,8 @@ def parse_amount(text: str) -> tuple[Money | None, int]:
         raw = _TRAILING_MARK.sub("", raw)
     if raw.startswith("(") and raw.endswith(")"):
         sign, raw = -1, raw[1:-1]
-    raw = raw.replace(",", "").replace("₹", "").replace("INR", "").strip()
+    raw = re.sub(r"(?i)^(rs\.?|inr|₹)\s*", "", raw.replace(",", "").replace("₹", "").strip())
+    raw = raw.replace("INR", "").strip()
     if raw.startswith("-"):
         sign, raw = -1, raw[1:]
     if not raw:
@@ -149,6 +152,7 @@ class Statement:
     balance_broken: list[int] = field(default_factory=list)
     balances_seen: int = 0
     strategy: str = "csv"
+    order: str = "oldest first"
 
     @property
     def reconciles(self) -> bool:
@@ -216,7 +220,8 @@ def _map_columns(row: list[str]) -> dict[str, int]:
 
 def _find_header(rows: list[list[str]]) -> tuple[int, dict[str, int]]:
     best_line, best_map, best_score = -1, {}, 0
-    for i, row in enumerate(rows[:40]):
+    # Statements often open with pages of account summary; look past them for the table.
+    for i, row in enumerate(rows[:HEADER_SEARCH]):
         mapping = _map_columns(row)
         score = len(mapping) + (2 if "narration" in mapping else 0)
         if ("debit" in mapping and "credit" in mapping) or "amount" in mapping:
@@ -226,16 +231,128 @@ def _find_header(rows: list[list[str]]) -> tuple[int, dict[str, int]]:
 
     if best_score < 4 or "txn_date" not in best_map or "narration" not in best_map:
         raise UnreadableStatement(
-            "no row in the first 40 lines looks like a statement header; "
+            "no row looks like a statement header (Date, Narration, amounts); "
             f"best guess was line {best_line + 1} with {sorted(best_map)}"
         )
     return best_line, best_map
 
 
+def decode(blob: bytes) -> str:
+    """Bank exports are UTF-8, UTF-16 (some Excel saves) or Windows-1252; never guess wrong silently."""
+    if blob.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return blob.decode("utf-16")
+    try:
+        return blob.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return blob.decode("cp1252", errors="replace")
+
+
+def _delimiter(text: str) -> str:
+    sample = "\n".join(text.splitlines()[:60])
+    counts = {d: sample.count(d) for d in (",", "\t", ";", "|")}
+    best = max(counts, key=lambda d: counts[d])
+    return best if counts[best] > counts[","] * 1.5 else ","
+
+
+def parse_bytes(blob: bytes, name: str = "the statement", password: str | None = None) -> Statement:
+    """Read a statement in whatever form a bank hands it out: PDF, Excel (.xlsx/.xls), an HTML
+    table saved with an .xls name, or delimited text."""
+    head = blob[:2048].lstrip()
+    if head.startswith(b"%PDF") or name.lower().endswith(".pdf"):
+        return parse_pdf_bytes(blob, password=password, label=name)
+    if head.startswith(b"PK\x03\x04"):
+        statement = parse_rows(_xlsx_rows(blob, name))
+    elif head.startswith(b"\xd0\xcf\x11\xe0"):
+        statement = parse_rows(_xls_rows(blob, name))
+    elif re.match(rb"(?is)\s*(<!doctype html|<html|<table|<\?xml[^>]*>\s*<html)", head) or b"<table" in head.lower():
+        statement = parse_rows(_html_rows(decode(blob)))
+    else:
+        return parse(decode(blob))
+    statement.strategy = "spreadsheet"
+    return statement
+
+
+def _cell_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y")
+    if isinstance(value, date):
+        return value.strftime("%d/%m/%Y")
+    if isinstance(value, float):
+        return f"{value:.2f}" if value != int(value) or abs(value) < 1e9 else str(int(value))
+    return str(value).strip()
+
+
+def _xlsx_rows(blob: bytes, name: str) -> list[list[str]]:
+    try:
+        import openpyxl
+
+        book = openpyxl.load_workbook(io.BytesIO(blob), read_only=True, data_only=True)
+    except Exception as exc:
+        raise UnreadableStatement(f"could not open {name} as an Excel workbook") from exc
+    rows: list[list[str]] = []
+    for sheet in book.worksheets:
+        rows.extend([_cell_text(v) for v in row] for row in sheet.iter_rows(values_only=True))
+    return rows
+
+
+def _xls_rows(blob: bytes, name: str) -> list[list[str]]:
+    try:
+        import xlrd
+
+        book = xlrd.open_workbook(file_contents=blob)
+    except Exception as exc:
+        raise UnreadableStatement(f"could not open {name} as an Excel 97-2003 workbook") from exc
+    rows: list[list[str]] = []
+    for sheet in book.sheets():
+        for r in range(sheet.nrows):
+            cells = []
+            for c in range(sheet.ncols):
+                cell = sheet.cell(r, c)
+                if cell.ctype == xlrd.XL_CELL_DATE:
+                    cells.append(_cell_text(xlrd.xldate_as_datetime(cell.value, book.datemode)))
+                else:
+                    cells.append(_cell_text(cell.value))
+            rows.append(cells)
+    return rows
+
+
+def _html_rows(text: str) -> list[list[str]]:
+    from html.parser import HTMLParser
+
+    class Table(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rows: list[list[str]] = []
+            self.cell: list[str] | None = None
+
+        def handle_starttag(self, tag: str, attrs: Any) -> None:
+            if tag == "tr":
+                self.rows.append([])
+            elif tag in ("td", "th"):
+                self.cell = []
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag in ("td", "th") and self.cell is not None:
+                if not self.rows:
+                    self.rows.append([])
+                self.rows[-1].append(" ".join("".join(self.cell).split()))
+                self.cell = None
+
+        def handle_data(self, data: str) -> None:
+            if self.cell is not None:
+                self.cell.append(data)
+
+    table = Table()
+    table.feed(text)
+    return [r for r in table.rows if r]
+
+
 def parse(text: str) -> Statement:
     previous = csv.field_size_limit(MAX_FIELD)
     try:
-        return parse_rows(list(csv.reader(io.StringIO(text))))
+        return parse_rows(list(csv.reader(io.StringIO(text), delimiter=_delimiter(text))))
     except csv.Error as exc:
         raise UnreadableStatement(
             f"could not read this as delimited text: {exc}. A field longer than "
@@ -246,8 +363,59 @@ def parse(text: str) -> Statement:
         csv.field_size_limit(previous)
 
 
+_FOOTER = re.compile(
+    r"\bpage\s*\d+(\s*(of|/)\s*\w+)?\b|computer[- ]generated|end of statement|\*{3}|"
+    r"^\s*(opening|closing)\s+balance\b|statement\s+(summary|of\s+account)|^\s*total\b",
+    re.IGNORECASE,
+)
+
+
 def parse_rows(rows: list[list[str]]) -> Statement:
     header_line, columns = _find_header(rows)
+    body = _join_wrapped(list(enumerate(rows[header_line + 1:], start=header_line + 2)), columns, rows[header_line])
+    forward = _parse_body(body, columns, header_line)
+    if forward.reconciles or len(forward.rows) < 2 or not forward.balance_checked:
+        return forward
+    # Some banks list the newest transaction first. Read it the other way round and keep
+    # whichever order the statement's own running balance agrees with.
+    backward = _parse_body(list(reversed(body)), columns, header_line)
+    if len(backward.balance_broken) < len(forward.balance_broken):
+        backward.order = "newest first"
+        return backward
+    return forward
+
+
+def _join_wrapped(
+    body: list[tuple[int, list[str]]], columns: dict[str, int], header: list[str]
+) -> list[tuple[int, list[str]]]:
+    """A narration that wrapped onto the next line belongs to the row above it, not to nothing.
+
+    The reference a bank prints (often the UTR) is usually on that second line, so dropping it
+    would break matching a payout to its credit.
+    """
+    narr = columns.get("narration")
+    date_col = columns.get("txn_date")
+    header_words = {_norm(c) for c in header if _norm(c)}
+    out: list[tuple[int, list[str]]] = []
+    for i, row in body:
+        text = row[narr].strip() if narr is not None and narr < len(row) else ""
+        others = [c for k, c in enumerate(row) if k != narr and c.strip()]
+        dated = date_col is not None and date_col < len(row) and parse_date(row[date_col]) is not None
+        if (
+            not dated and text and not others and out and not _FOOTER.search(text)
+            and _norm(text) not in header_words and narr is not None
+        ):
+            j, parent = out[-1]
+            if date_col is not None and date_col < len(parent) and parse_date(parent[date_col]) is not None:
+                merged = list(parent)
+                merged[narr] = f"{merged[narr]} {text}".strip()
+                out[-1] = (j, merged)
+                continue
+        out.append((i, row))
+    return out
+
+
+def _parse_body(body: list[tuple[int, list[str]]], columns: dict[str, int], header_line: int) -> Statement:
     out = Statement(columns=columns, header_line=header_line + 1)
 
     def cell(row: list[str], role: str) -> str:
@@ -256,7 +424,7 @@ def parse_rows(rows: list[list[str]]) -> Statement:
 
     previous: Money | None = None
     pending = Money.zero()
-    for i, row in enumerate(rows[header_line + 1:], start=header_line + 2):
+    for i, row in body:
         if not any(c.strip() for c in row):
             continue
         txn = parse_date(cell(row, "txn_date"))
@@ -409,9 +577,7 @@ def parse_pdf_bytes(
     try:
         with pdfplumber.open(io.BytesIO(blob), password=password or "") as pdf:
             for name, extract in _STRATEGIES:
-                rows: list[list[str]] = []
-                for page in pdf.pages:
-                    rows.extend(extract(page))
+                rows = extract(pdf.pages)
                 if len(rows) > 2:
                     candidates.append((name, rows))
     except UnreadableStatement:
@@ -455,12 +621,35 @@ def _score(statement: Statement) -> tuple[int, int, int]:
     )
 
 
-def _ruled_tables(page: PdfPage) -> list[list[str]]:
-    return _tables(page, {"vertical_strategy": "lines", "horizontal_strategy": "lines"})
+def _ruled_tables(pages: Sequence[PdfPage]) -> list[list[str]]:
+    return [r for page in pages for r in _tables(page, {"vertical_strategy": "lines", "horizontal_strategy": "lines"})]
 
 
-def _text_tables(page: PdfPage) -> list[list[str]]:
-    return _tables(page, {"vertical_strategy": "text", "horizontal_strategy": "text"})
+def _text_tables(pages: Sequence[PdfPage]) -> list[list[str]]:
+    return [r for page in pages for r in _tables(page, {"vertical_strategy": "text", "horizontal_strategy": "text"})]
+
+
+def _word_rows(pages: Sequence[PdfPage]) -> list[list[str]]:
+    """Read every page by word position. Most banks print the column header on the first page
+    only, so later pages reuse the columns found on the last page that had one."""
+    rows: list[list[str]] = []
+    anchors: list[float] = []
+    for page in pages:
+        lines = _lines(page)
+        found = _column_anchors(lines)
+        if found:
+            if anchors and len(found) != len(anchors):
+                rows.append([])  # a different table starts; keep the rows of each apart
+            anchors = found
+        if not anchors:
+            continue
+        for line in lines:
+            cells = [""] * len(anchors)
+            for word in line:
+                i = _nearest_column(word, anchors)
+                cells[i] = f"{cells[i]} {word['text']}".strip() if cells[i] else word["text"]
+            rows.append(cells)
+    return rows
 
 
 def _tables(page: PdfPage, settings: dict[str, str]) -> list[list[str]]:
@@ -476,38 +665,23 @@ def _tables(page: PdfPage, settings: dict[str, str]) -> list[list[str]]:
     ]
 
 
-def _rows_from_words(page: PdfPage, line_tolerance: float = 2.5) -> list[list[str]]:
+def _lines(page: PdfPage, line_tolerance: float = 2.5) -> list[list[dict[str, Any]]]:
     try:
         words = page.extract_words(use_text_flow=False)
     except Exception:  # noqa: BLE001
         return []
-    if not words:
-        return []
-
     lines: list[list[dict[str, Any]]] = []
-    for word in sorted(words, key=lambda w: (round(w["top"], 1), w["x0"])):
+    for word in sorted(words or [], key=lambda w: (round(w["top"], 1), w["x0"])):
         if lines and abs(lines[-1][0]["top"] - word["top"]) <= line_tolerance:
             lines[-1].append(word)
         else:
             lines.append([word])
-
-    anchors = _column_anchors(lines)
-    if not anchors:
-        return []
-
-    rows: list[list[str]] = []
-    for line in lines:
-        cells = [""] * len(anchors)
-        for word in line:
-            i = _nearest_column(word, anchors)
-            cells[i] = f"{cells[i]} {word['text']}".strip() if cells[i] else word["text"]
-        rows.append(cells)
-    return rows
+    return lines
 
 
 def _column_anchors(lines: list[list[dict[str, Any]]], gap: float = 12.0) -> list[float]:
     best: tuple[int, list[dict[str, Any]]] = (0, [])
-    for line in lines[:40]:
+    for line in lines:
         text = [_norm(w["text"]) for w in line]
         hits = sum(
             1
@@ -536,9 +710,9 @@ def _nearest_column(word: dict[str, Any], anchors: list[float]) -> int:
     return index
 
 
-_STRATEGIES: list[tuple[str, Callable[[PdfPage], list[list[str]]]]] = [
+_STRATEGIES: list[tuple[str, Callable[[Sequence[PdfPage]], list[list[str]]]]] = [
     ("ruled tables", _ruled_tables),
-    ("word coordinates", _rows_from_words),
+    ("word coordinates", _word_rows),
     ("text tables", _text_tables),
 ]
 

@@ -25,6 +25,14 @@
     "statement": "bank_statement_overcharged.csv"
    }
   },
+  "missing_pdf": {
+   "title": "Missing payout, 5-page PDF",
+   "story": "The same missing payout, but the bank statement is a 5-page PDF with a cover page, wrapped lines and terms.",
+   "files": {
+    "recon": "razorpay_report_missing.json",
+    "statement": "statement_hdfc_long.pdf"
+   }
+  },
   "gst_all": {
    "title": "All credit claimable",
    "story": "Every rupee of GST on fees shows up in GSTR-2B.",
@@ -84,6 +92,20 @@
     "statement": "statement_hdfc.pdf"
    }
   },
+  "st_long": {
+   "title": "5-page PDF with extras",
+   "story": "A cover page, the header on page one only, wrapped narrations and a terms page.",
+   "files": {
+    "statement": "statement_hdfc_long.pdf"
+   }
+  },
+  "st_xlsx": {
+   "title": "Excel (.xlsx)",
+   "story": "The Excel download, with real dates and numbers.",
+   "files": {
+    "statement": "statement_hdfc.xlsx"
+   }
+  },
   "st_locked": {
    "title": "Password-protected PDF",
    "story": "Locked like a real bank statement. Password: HDFC1234",
@@ -97,12 +119,14 @@
   "reconcile": [
    "clean",
    "missing",
-   "overcharged"
+   "overcharged",
+   "missing_pdf"
   ],
   "missing": [
    "clean",
    "missing",
-   "overcharged"
+   "overcharged",
+   "missing_pdf"
   ],
   "fees": [
    "clean",
@@ -112,7 +136,8 @@
   "dashboard": [
    "clean",
    "missing",
-   "overcharged"
+   "overcharged",
+   "missing_pdf"
   ],
   "ask": [
    "clean",
@@ -130,6 +155,8 @@
    "st_sbi",
    "st_axis",
    "st_pdf",
+   "st_long",
+   "st_xlsx",
    "st_locked"
   ]
  }
