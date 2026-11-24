@@ -574,7 +574,7 @@ def ask_question(body: AskIn) -> AskOut:
     except qa.UnsafeQuestion as exc:
         raise problem(422, "refused", f"That question was refused: {exc}", "Ask about your payments, fees, payouts or refunds.") from exc
 
-    note = ""
+    note = answer.note
     if answer.refused:
         note = answer.refused
     elif not answer.rows:
@@ -672,7 +672,7 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
 
         def attempt(driver: Any) -> tuple[Any, Any]:
             belt = Toolbelt(session.warehouse, close, session.start, session.end, session.contracted)
-            run = investigate(belt, driver)
+            run = investigate(belt, driver, judge=lambda p: adjudicate(session.warehouse, p, close))
             return run, adjudicate(session.warehouse, run.proposal, close)
     else:
         # Lines read straight off the bank statement (rent, bank charges) are not worth a second opinion.
@@ -722,8 +722,9 @@ def investigate_residual(body: InvestigateIn) -> InvestigateOut:
     return InvestigateOut(
         mode=mode, cause=cause_name, driver=_label(driver), short_by=short,
         steps=[
-            StepOut(tool=s.tool, args=s.args, ok=s.ok,
-                    found=str(s.result.get("amount", "")) if s.ok and isinstance(s.result, dict) else "")
+            StepOut(tool=s.tool, args=s.args if s.tool != "propose" else {"cause": s.args.get("name", "")}, ok=s.ok,
+                    found=(str(s.result.get("amount", "")) if s.ok and isinstance(s.result, dict)
+                           else "rejected, tried again" if s.tool == "propose" else ""))
             for s in run.steps
         ],
         proposal=({"name": run.proposal.name, "accounts": list(run.proposal.accounts), "sql": run.proposal.sql} if run.proposal else None),

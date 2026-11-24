@@ -58,5 +58,5 @@ def rediscover_with_agent(
         )
 
     belt = Toolbelt(warehouse, close, start, end, contracted)
-    run = investigate(belt, driver, budget=budget)
+    run = investigate(belt, driver, budget=budget, judge=lambda p: adjudicate(warehouse, p, close))
     return Investigation(cause, close, run, adjudicate(warehouse, run.proposal, close))

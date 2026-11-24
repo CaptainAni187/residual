@@ -33,7 +33,11 @@ problems: list[str] = []
 
 def post(path: str, **kwargs) -> dict:
     started = time.monotonic()
-    reply = client.post(f"{BASE}{path}", **kwargs)
+    try:
+        reply = client.post(f"{BASE}{path}", **kwargs)
+    except httpx.HTTPError as exc:
+        problems.append(f"{path} did not answer within 120s ({type(exc).__name__})")
+        return {"_status": 0, "_ms": int((time.monotonic() - started) * 1000), "source": "", "reason": "no answer"}
     body = reply.json()
     body["_ms"] = int((time.monotonic() - started) * 1000)
     body["_status"] = reply.status_code
@@ -65,7 +69,7 @@ for key in ("missing", "overcharged"):
 
     for kind in ("payout_trace", "fee_dispute", "escalate"):
         out = post("/draft", json={"token": token, "kind": kind})
-        if out["_status"] == 409:
+        if out["_status"] in (0, 409):
             continue
         tag = "MODEL" if model(out.get("source", "")) else "template"
         print(f"  draft {kind:28} {tag:8} {out['_ms']:>5}ms  {out.get('source')} | {out.get('reason')}")

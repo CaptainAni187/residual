@@ -35,6 +35,7 @@ class Answer:
     rows: list[tuple[Any, ...]] = field(default_factory=list)
     source: str = "catalogue"
     refused: str = ""
+    note: str = ""
 
     @property
     def ok(self) -> bool:
@@ -45,6 +46,8 @@ _METHODS = {"card": "Card", "upi": "UPI", "netbanking": "Net banking", "wallet":
 
 
 def render(value: Any, column: str = "") -> str:
+    if value is None and _is_money(column):
+        return "₹0.00"  # a sum over nothing is nothing, not a blank
     if isinstance(value, (int, float)) and not isinstance(value, bool) and _is_money(column):
         return str(Money(round(value))).replace("-INR ", "-₹").replace("INR ", "₹")
     if column.lower() == "method" and isinstance(value, str):
@@ -287,6 +290,8 @@ def ask(
             )
         answer = run(wh, sql, question=question, source=f"catalogue: {title}")
         if answer.ok:
+            if answered is not None:
+                answer.note = "The AI's own query didn't work, so this is the closest standard answer."
             return answer
 
     if answered is not None:

@@ -140,6 +140,7 @@ export default function AskTool() {
                 {turn.err && <div className="bubble them err-bubble">{turn.err}</div>}
                 {turn.a && (
                   <div className="bubble them">
+                    {turn.a.rows.length > 0 && turn.a.note && <p className="hint" style={{ margin: "0 0 8px" }}>{turn.a.note}</p>}
                     {turn.a.rows.length > 0 ? (
                       <div className="wide">
                         <table className="data compact">

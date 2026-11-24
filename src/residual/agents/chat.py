@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from typing import Any
 
 from residual.agents.loop import PROVIDERS, current_model, post_chat
@@ -55,7 +56,7 @@ class AllProvidersFailed(RuntimeError):
 class Chat:
     """Speaks through whichever configured provider answers, falling back down ORDER on any failure."""
 
-    def __init__(self, provider: str = "", model: str = "", post: Any = None) -> None:
+    def __init__(self, provider: str = "", model: str = "", post: Any = None, budget: float = 25.0) -> None:
         ready = available()
         if provider and provider in ready:
             ready = [provider, *[p for p in ready if p != provider]]
@@ -64,6 +65,8 @@ class Chat:
         self.model = model
         self._post = post
         self.failures: list[str] = []
+        self.budget = budget
+        self._deadline = 0.0
 
     @property
     def ready(self) -> bool:
@@ -80,7 +83,12 @@ class Chat:
         if not self.providers:
             raise RuntimeError("no model is configured")
         self.failures = []
+        # One answer gets this long across every provider and model, so a page never hangs.
+        self._deadline = time.monotonic() + self.budget
         for provider in self.providers:
+            if self._deadline - time.monotonic() < 3:
+                self.failures.append(f"{provider}: skipped, out of time")
+                continue
             try:
                 if provider == "anthropic":
                     text = self._anthropic(provider, system, prompt, max_tokens)
@@ -122,7 +130,8 @@ class Chat:
                     {"role": "user", "content": prompt},
                 ],
             },
-            timeout=30,
+            timeout=15,
+            deadline=self._deadline,
         )
         text = body.get("choices", [{}])[0].get("message", {}).get("content") or ""
         return clean(str(text))

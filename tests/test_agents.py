@@ -364,3 +364,29 @@ def test_a_model_that_answers_in_prose_is_reminded_once(belt):
     run = investigate(belt, OpenAIDriver(provider="groq", post=post), budget=1)
     assert [s.tool for s in run.steps] == ["unbalanced_accounts"]
     assert any(m["role"] == "user" and "propose" in m["content"] for m in post.bodies[1]["messages"])
+
+
+def test_a_rejected_proposal_is_handed_back_and_the_model_corrects_itself(belt):
+    from residual.agents.loop import OpenAIDriver
+    from residual.explain.propose import adjudicate
+
+    wrong = {"name": "guess", "accounts": ["fee_expense"], "sql": "SELECT no_such_column FROM events"}
+    right = {"name": "gateway_fee", "accounts": ["fee_expense"], "sql": f"SELECT {belt.close.residual.paise}"}
+    post = _Poster([_openai_reply(FINISH.name, wrong), _openai_reply(FINISH.name, right)])
+    run = investigate(belt, OpenAIDriver(provider="groq", post=post), judge=lambda p: adjudicate(belt.wh, p, belt.close))
+    assert run.proposal is not None and run.proposal.name == "gateway_fee"
+    assert run.steps[0].tool == FINISH.name and not run.steps[0].ok
+    told = [m for m in post.bodies[1]["messages"] if m["role"] == "tool"]
+    assert told and "rejected" in told[-1]["content"], "the model must be told why"
+
+
+def test_a_driver_out_of_time_stops_instead_of_hanging(belt, monkeypatch):
+    import httpx
+
+    from residual.agents.loop import OpenAIDriver, OutOfTime
+
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: pytest.fail("no request once the budget is spent"))
+    driver = OpenAIDriver(provider="groq", budget=0.5)
+    with pytest.raises(OutOfTime):
+        investigate(belt, driver)

@@ -293,3 +293,38 @@ def test_without_a_model_nothing_is_metered(monkeypatch):
     token = _token(client, "clean")
     for _ in range(3):
         assert client.post("/api/ask", json={"token": token, "question": "fees by method"}).status_code == 200
+
+
+def test_one_answer_never_takes_longer_than_its_budget(monkeypatch):
+    import time as _time
+
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    calls = []
+
+    def slow(url, **kw):
+        calls.append(kw["timeout"])
+        _time.sleep(0.2)
+        return _reply(503)
+
+    monkeypatch.setattr(httpx, "post", slow)
+    speaker = chat.Chat(budget=3.0)
+    started = _time.monotonic()
+    with pytest.raises(chat.AllProvidersFailed):
+        speaker.say("s", "p")
+    assert _time.monotonic() - started < 3.5
+    assert all(t <= 3.0 for t in calls)
+
+
+def test_a_model_that_rejects_reasoning_effort_is_asked_again_without_it(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    sent = []
+
+    def post(url, json, **kw):
+        sent.append(dict(json))
+        return _reply(400) if "reasoning_effort" in json else _reply(200, "fine")
+
+    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(loop, "PROVIDERS", {**loop.PROVIDERS, "groq": {**loop.PROVIDERS["groq"], "model": "openai/gpt-oss-120b"}})
+    assert chat.Chat().say("s", "p") == "fine"
+    assert "reasoning_effort" in sent[0] and "reasoning_effort" not in sent[1]

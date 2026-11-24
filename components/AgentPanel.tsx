@@ -19,6 +19,7 @@ const TOOL_WORDS: Record<string, string> = {
   run_query: "Ran a query",
   search_reference: "Searched the statement for the reference",
   search_amount: "Searched for a credit of the same amount",
+  propose: "Proposed a cause",
 };
 
 function Transcript({ run }: { run: Investigation }) {

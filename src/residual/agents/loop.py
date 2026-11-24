@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
@@ -76,8 +77,13 @@ class Driver(Protocol):
     def act(self, belt: Toolbelt, run: Run) -> Action | None: ...
 
 
-def investigate(belt: Toolbelt, driver: Driver, budget: int = BUDGET) -> Run:
+def investigate(
+    belt: Toolbelt, driver: Driver, budget: int = BUDGET, judge: Callable[[Proposal], Any] | None = None,
+) -> Run:
+    """Let the driver act until it proposes a cause. With a `judge`, a rejected proposal is
+    handed back with the reason so the driver can correct itself, as an analyst would."""
     run = Run()
+    rejected = 0
     for _ in range(budget):
         action = driver.act(belt, run)
         if action is None:
@@ -85,7 +91,14 @@ def investigate(belt: Toolbelt, driver: Driver, budget: int = BUDGET) -> Run:
             return run
         name, args = action
         if name == FINISH.name:
-            run.proposal = _as_proposal(args, driver.name)
+            proposal = _as_proposal(args, driver.name)
+            if judge is not None and proposal is not None and rejected < 2:
+                verdict = judge(proposal)
+                if not verdict.accepted:
+                    rejected += 1
+                    run.steps.append(Step(name, args, False, f"rejected: {verdict.reason()}"))
+                    continue
+            run.proposal = proposal
             run.stopped = "proposed" if run.proposal else "malformed proposal"
             return run
         try:
@@ -366,28 +379,55 @@ ALTERNATES = 2
 
 
 def _tune(provider: str, body: dict[str, Any]) -> None:
-    """Groq's gpt-oss models think at length by default; a short task needs only a little."""
-    if provider == "groq" and "gpt-oss" in str(body.get("model")):
+    """Reasoning models think at length by default; these short tasks need only a little,
+    and a long think on a free tier mostly means a timeout."""
+    model = str(body.get("model"))
+    if (provider == "groq" and "gpt-oss" in model) or (provider == "gemini" and "2.5" in model):
         body.setdefault("reasoning_effort", "low")
     else:
         body.pop("reasoning_effort", None)
 
 
-def post_chat(provider: str, key: str, payload: dict[str, Any], timeout: float) -> tuple[dict[str, Any], str]:
-    """POST a chat completion; if the model is gone or throttled and none was pinned, try other live models."""
+class OutOfTime(RuntimeError):
+    pass
+
+
+def post_chat(
+    provider: str, key: str, payload: dict[str, Any], timeout: float, deadline: float | None = None,
+) -> tuple[dict[str, Any], str]:
+    """POST a chat completion; if the model is gone or throttled and none was pinned, try other live
+    models. Never runs past `deadline` (a time.monotonic() value), so one slow provider cannot hang a page."""
+    import time
+
     import httpx
+
+    def remaining() -> float:
+        left = timeout if deadline is None else min(timeout, deadline - time.monotonic())
+        if left < 2:
+            raise OutOfTime("ran out of time")
+        return left
 
     url = f"{PROVIDERS[provider]['base_url']}/chat/completions"
     headers = {"Authorization": f"Bearer {key}"}
     body = {**payload, "model": payload.get("model") or current_model(provider)}
-    _tune(provider, body)
-    reply = httpx.post(url, headers=headers, json=body, timeout=timeout)
+
+    def send() -> httpx.Response:
+        _tune(provider, body)
+        reply = httpx.post(url, headers=headers, json=body, timeout=remaining())
+        if reply.status_code == 400 and "reasoning_effort" in body:
+            # A model that does not take the setting: ask again without it.
+            body["reasoning_effort"] = None
+            sent = {k: v for k, v in body.items() if v is not None}
+            reply = httpx.post(url, headers=headers, json=sent, timeout=remaining())
+            body.pop("reasoning_effort", None)
+        return reply
+
+    reply = send()
     if reply.status_code in SWAP_ON and not override_for(provider):
         tried = {body["model"]}
         for model in [m for m in discover(provider, key) if m not in tried][:ALTERNATES]:
             body["model"] = model
-            _tune(provider, body)
-            reply = httpx.post(url, headers=headers, json=body, timeout=timeout)
+            reply = send()
             if reply.status_code < 400:
                 _LIVE[provider] = model
                 break
@@ -405,6 +445,7 @@ class OpenAIDriver:
         model: str = "",
         api_key: str = "",
         post: Any = None,
+        budget: float = 30.0,
     ) -> None:
         if provider not in PROVIDERS:
             raise ValueError(f"unknown provider {provider!r}; known: {sorted(PROVIDERS)}")
@@ -420,6 +461,8 @@ class OpenAIDriver:
         self._queue: list[Action] = []
         self._awaiting: list[str] = []
         self._nudged = False
+        self.budget = budget
+        self._deadline: float | None = None
 
     def key(self) -> str:
         key = self._key or os.environ.get(self.env, "")
@@ -431,7 +474,13 @@ class OpenAIDriver:
         if self._post is not None:
             return cast(dict[str, Any], self._post(body))
 
-        reply, used = post_chat(self.provider, self.key(), {**body, "model": self.model if self._pinned else ""}, 20)
+        import time
+
+        if self._deadline is None:
+            self._deadline = time.monotonic() + self.budget
+        reply, used = post_chat(
+            self.provider, self.key(), {**body, "model": self.model if self._pinned else ""}, 15, deadline=self._deadline,
+        )
         self.model = self.name = used
         return reply
 
@@ -478,7 +527,9 @@ class OpenAIDriver:
                     args = {}
                 name = str(fn.get("name"))
                 if name == FINISH.name:
-                    self._queue, self._awaiting = [], []
+                    # If the verifier rejects it, the reason comes back as this call's answer.
+                    self._queue = []
+                    self._awaiting = [str(call.get("id") or "propose")]
                     return (name, cast(dict[str, Any], args))
                 self._queue.append((name, cast(dict[str, Any], args)))
                 self._awaiting.append(str(call.get("id") or f"call_{len(self._messages)}_{len(self._awaiting)}"))

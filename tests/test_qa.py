@@ -296,3 +296,7 @@ def test_columns_read_like_words_not_database_names():
 def test_common_questions_are_answered_without_a_model(wh):
     for question in ("what is my average order value?", "total sales", "payments by day"):
         assert ask(wh, question).ok, question
+
+
+def test_a_sum_over_nothing_reads_as_zero_rupees():
+    assert render(None, "total_refund_paise") == "₹0.00"

@@ -8,8 +8,8 @@ from decimal import Decimal, InvalidOperation
 from residual.ledger.money import Money
 
 _MONEY = re.compile(
-    r"(-?)\s*(?:INR|Rs\.?|₹)\s*(-?[\d,]+(?:\.\d{1,2})?)"
-    r"|(?<![\w.])(-?\d[\d,]{2,}(?:\.\d{2})?)(?![\w.])",
+    r"(-?)\s*(?:INR|Rs\.?|₹)\s*(-?\d[\d,]*(?:\.\d{1,2})?)"
+    r"|(?<![\w.,])(-?\d{1,3}(?:,\d{2,3})+(?:\.\d{2})?|-?\d{3,}(?:\.\d{2})?)(?![\w.]|,\d)",
     re.IGNORECASE,
 )
 
@@ -72,7 +72,8 @@ _DATES = re.compile(
     rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH},?\s+\d{{4}}\b"
     rf"|\b{_MONTH}\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s+\d{{4}}\b"
     rf"|\b{_MONTH}\s+\d{{4}}\b"
-    rf"|\b(?:FY|AY)\s?\d{{2,4}}(?:-\d{{2,4}})?\b",
+    rf"|\b(?:FY|AY)\s?\d{{2,4}}(?:-\d{{2,4}})?\b"
+    rf"|\b20\d\d(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\b",
     re.IGNORECASE,
 )
 _PERCENT = re.compile(r"-?\d+(?:\.\d+)?\s*(?:%|per\s?cent\b)", re.IGNORECASE)
@@ -111,7 +112,9 @@ def check(
     for ident in sorted({i for i in identifiers if i}, key=len, reverse=True):
         text = text.replace(ident, " ")
     for match in _IDENT.finditer(text):
-        citations.append(Citation(match.group(0), Money.zero(), False))
+        # Part of a known reference (a bank's id often embeds the date) is still that reference.
+        if not any(match.group(0) in ident for ident in identifiers):
+            citations.append(Citation(match.group(0), Money.zero(), False))
     text = _IDENT.sub(" ", text)
     text = _DATES.sub(" ", text)
     text = _PERCENT.sub(" ", text)
